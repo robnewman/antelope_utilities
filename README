@@ -1,0 +1,7 @@
+This repository contains a bunch of useful (to me anyway) scripts for interacting with Boulder Real Time Technologies (BRTT) Antelope Environmental Monitoring System. The scripts are predominantly in Python, but I plan on adding other languages too.
+
+If you have any questions about this repository, give me a holler on GitHub.
+
+More information on BRTT: http://www.brtt.com
+The official Antelope Contributed code repository: http://github.com/antelopeusersgroup/antelope_contrib
+More information on me: http://eqinfo.ucsd.edu/~rnewman

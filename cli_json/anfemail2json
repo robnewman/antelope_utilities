@@ -1,0 +1,87 @@
+#!/usr/bin/env python
+
+'''
+Simple datascope ANF email output to JSON run via cron every 5 mins
+
+@package  Datascope
+@author   Rob Newman <robertlnewman@gmail.com> x21333
+@license  MIT style license
+'''
+
+import sys
+import os
+import json
+import gzip
+from optparse import OptionParser
+
+sys.path.append(os.environ['ANTELOPE'] + '/local/data/python/antelope')
+import datascope
+from stock import pfupdate, pfget, epoch2str
+
+web_root = '/path/to/webroot'
+common_pf = '%s/conf/common.pf' % web_root
+pfupdate(common_pf)
+cache_json = pfget(common_pf, 'CACHEJSON')
+file_path = '%s/stations/anfemail.json' % cache_json
+email_dict = {}
+fields = ['from', 'subject', 'time', 'bytes', 'foff', 'dir', 'dfile']
+
+def run_dbloop(dbptr):
+    """Loop over all the records
+    in the view
+    """
+    results = {}
+    for i in range(dbptr.query('dbRECORD_COUNT')):
+        db[3] = i
+        results[i] = {}
+        for f in fields:
+            val = dbptr.getv(f)[0]
+            results[i][f] = val
+            if f == 'time':
+                results[i]['readable_time'] = epoch2str( val, '%m/%d/%Y %H:%M:%S %Z' )
+    return results
+
+def main():
+    """Open up database table
+    and grab all records
+    """
+    usage = "Usage: %prog [options]"
+    parser = OptionParser(usage=usage)
+    parser.add_option("-v", action="store_true", dest="verbose", help="verbose output", default=False)
+    (options, args) = parser.parse_args()
+    if options.verbose:
+        verbose = True
+    else:
+        verbose = False
+
+    dbmail = pfget(common_pf, 'ANF_EMAIL_DB')
+    if verbose:
+        print "- Opening up email database: %s" % dbmail
+    db = datascope.dbopen(dbmail, 'r')
+    db.lookup('', 'in', '', '')
+    db.sort('time', unique=True, reverse=True)
+
+    if verbose:
+        print "- Looping over %d records" % db.query('dbRECORD_COUNT')
+
+    email_dict = run_dbloop(db)
+
+    if verbose:
+        print "- Dumping JSON file: %s" % file_path
+    output_file_path = '%s+' % file_path
+    f = open(output_file_path, 'w') 
+    json.dump(email_dict, f, sort_keys=True, indent=2)
+    f.flush()
+    os.rename(output_file_path,file_path)
+
+    if verbose:
+        print "- Create gzip file: %s.gz" % file_path
+
+    f_in = open(file_path, 'rb')
+    f_out = gzip.open('%s.gz' % file_path,'wb' )
+    f_out.writelines(f_in)
+    f_out.close()
+    f_in.close()
+
+if __name__ == '__main__':
+    main()
