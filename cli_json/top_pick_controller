@@ -57,7 +57,7 @@ else:
 # }}} Get command line arguments
 
 # {{{ Get config parameter file vars
-web_root = '/anf/web/vhosts/anf.ucsd.edu'
+web_root = '/path/to/webroot'
 common_pf = '%s/conf/common.pf' % web_root
 pfupdate(common_pf)
 cache_json = pfget(common_pf, 'CACHEJSON')
