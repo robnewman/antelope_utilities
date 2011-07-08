@@ -148,8 +148,7 @@ def orb_interaction(orbptr, selection_string=False, alerts=False):
  
 def main():
     """Main processing script
-    for all JSON summary & individual
-    files
+    for the JSON file
     """
     print "Start of script at time %s" % strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
     common_pf = 'common.pf'
