@@ -63,9 +63,8 @@ class GetMetadata:
         db = datascope.dblookup(self.dbptr, '', 'site', '', '')
         db.join('snetsta')
         db.join('deployment', outer=True)
-        db.subset('snet!~/TA/')
-        # db.subset('offdate==NULL')
-        # db.subset('offdate==NULL || offdate > now()')
+        # db.subset('snet!~/TA/')
+        db.subset('offdate==NULL || offdate > now()')
         db.sort(('snet','sta'), unique=True)
         for i in range(db.query('dbRECORD_COUNT')):
             db[3] = i
