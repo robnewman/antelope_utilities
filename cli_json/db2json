@@ -232,6 +232,23 @@ class NetworkSummary:
         self.infra_dbptr = datascope.dblookup(self.db, '', 'sitechan', '', '')
         self.baler_dbptr = datascope.dblookup(self.db, '', 'stabaler', '', '')
         self.comm_dbptr = datascope.dblookup(self.db, '', 'comm', '', '')
+        self.staq330_dbptr = datascope.dblookup(self.db, '', 'staq330', '', '')
+
+    def idtag_determiner(self, dlogger_id):
+        """The idtag field is only
+        in dlsite, staq330 and q330comm
+        tables. Dlsite is depreciated,
+        staq330 first used 2009-02-26.
+        Try staq330 first.
+        """
+        dbptr = datascope.dbsort(self.staq330_dbptr, 'ssident', unique=True)
+        dbptr.subset('ssident=~/%s/' % dlogger_id)
+        if dbptr.query('dbRECORD_COUNT') > 0:
+            dbptr[3] = 0
+            idtag = dbptr.getv('idtag')[0]
+            return idtag
+        else:
+            return 'N/A'
 
     def create_instrument_history(self):
         """Open the sitechan table then
@@ -511,24 +528,7 @@ class NetworkSummary:
                                 inst_dict[key]['datalogger']['model'] = this_datalogger[0]
                                 inst_dict[key]['datalogger']['css'] = this_datalogger[1]
                                 inst_dict[key]['datalogger']['ssident'] = dlogger_id
-                                # Try to get the idtag field for the 
-                                # datalogger (note: doesn't work for stations older than 2004-09)
-                                # Dlsite table has comms history
-                                # Assume that all idtags for a datalogger 
-                                # and station are the same if there is more than one record
-                                if ondate > 2004245:
-                                    dlsens_sub.join(self.dlsite_dbptr)
-                                    dlsens_sub.subset('dlname=~/TA_%s/' % sta)
-                                    if dlsens_sub.query('dbRECORD_COUNT') > 0:
-                                        if dlsens_sub.query('dbRECORD_COUNT') > 1:
-                                            if debug:
-                                                print '  - Ambiguous dlsite table entries! More than one record for dlname TA_%s. Just use the first one.' % sta
-                                        dlsens_sub[3] = 0
-                                        inst_dict[key]['datalogger']['idtag'] = dlsens_sub.getv('idtag')[0]
-                                    else:
-                                         inst_dict[key]['datalogger']['idtag'] = 'N/A'
-                                else:
-                                     inst_dict[key]['datalogger']['idtag'] = 'N/A'
+                                inst_dict[key]['datalogger']['idtag'] = self.idtag_determiner(dlogger_id)
                     inst_dict[key]['channels'][chan] = {}
                     inst_dict[key]['channels'][chan]['hang'] = hang
                     inst_dict[key]['channels'][chan]['vang'] = vang
