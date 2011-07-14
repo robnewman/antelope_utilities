@@ -17,7 +17,25 @@ sys.path.append('%s/local/data/python/antelope' % os.environ['ANTELOPE'])
 import datascope
 from time import time, gmtime
 
+try:
+    from guppy import hpy
+except ImportError:
+    print "Cannot load Guppy PE module. Debugging output repressed"
+    heapy_loaded = False
+else:
+    heapy_loaded = True
+    # Init heapy
+    hp = hpy()
+
 fields = ['snet', 'fsta', 'sta', 'chan', 'ondate', 'ctype', 'edepth', 'hang', 'vang']
+
+
+def update():
+    """Print relative memory statistics
+    and consumption since last cycle
+    """
+    print hp.heap()
+    hp.setref()
 
 def process_per_station(dbptr):
     """Process per station
@@ -30,6 +48,8 @@ def process_per_station(dbptr):
         for f in fields:
             value = dbptr.getv(f)[0]
             print "  \t%s\t\t%s" % (f, value)
+    if heapy_loaded:
+        update()
     return True
 
 def process_groups(dbptr):
