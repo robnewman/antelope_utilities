@@ -37,51 +37,38 @@ def update():
     print hp.heap()
     hp.setref()
 
-def process_groups(dbptr):
-    """Process each group
-    in turn by subsetting
-    then ungroup and print
-    out values
-    """
-    for i in range(dbptr.query('dbRECORD_COUNT')):
-        dbptr[3] = i
-        sub_sta = dbptr.getv('sta')[0]
-        print "- Process group for sta %s" % sub_sta
-        dbptr_sub = datascope.dbsubset(dbptr, 'sta=~/%s' % sub_sta)
-        dbptr_sub.ungroup()
-        for j in range(dbptr_sub.query('dbRECORD_COUNT')):
-            print " - Working on record %d" % j
-            dbptr_sub[3] = j
-            for f in fields:
-                value = dbptr_sub.getv(f)[0]
-                print "  \t%s\t\t%s" % (f, value)
-        if heapy_loaded:
-            update()
-        dbptr_sub.free()
-    return True
-
-def infinite_loop(dbptr):
+def infinite_loop():
     """Make an infinite
     loop to demostrate 
     Python memory blow up
     """
     while True:
-        process_groups(dbptr)
+        dbpath = '%s/demo/socalif/db/scdemo' % os.environ['ANTELOPE']
+        db = datascope.dbopen(dbpath, 'r')
+        db.lookup('', 'snetsta', '', '')
+        db.join('sitechan')
+        db.sort(('snet','sta'))
+        db.group('sta')
+        for i in range(db.query('dbRECORD_COUNT')):
+            db[3] = i
+            sub_sta = db.getv('sta')[0]
+            db_sub = datascope.dbsubset(db, 'sta=~/%s' % sub_sta)
+            db_sub.ungroup()
+            for j in range(db_sub.query('dbRECORD_COUNT')):
+                db_sub[3] = j
+                for f in fields:
+                    value = db_sub.getv(f)[0]
+                if heapy_loaded:
+                    update()
+            db_sub.free()
+        db.free()
 
 def main():
     """Open up demo database
     tables and group, then 
     run infinite loop
     """
-    dbpath = '%s/demo/socalif/db/scdemo' % os.environ['ANTELOPE']
-    print dbpath
-    db = datascope.dbopen(dbpath, 'r')
-    db.lookup('', 'snetsta', '', '')
-    db.join('sitechan')
-    db.sort(('snet','sta'))
-    db.group('sta')
-    infinite_loop(db)
-    db.free()
+    infinite_loop()
 
 if __name__ == '__main__':
     main()
