@@ -1,0 +1,71 @@
+#!/usr/bin/env python
+
+"""
+Example script to demonstrate the memory
+leak in the Python interface to Datascope
+
+@author    Rob Newman <robertlnewman@gmail.com> 858.822.1333
+@version   0.1
+@license   MIT style license
+@modified  2011-07-12
+@notes     1. Requires demo database
+"""
+
+import sys
+import os
+sys.path.append('%s/local/data/python/antelope' % os.environ['ANTELOPE'])
+import datascope
+from time import time, gmtime
+
+fields = ['snet', 'fsta', 'sta', 'chan', 'ondate', 'ctype', 'edepth', 'hang', 'vang']
+
+def process_per_station(dbptr):
+    """Process per station
+    and print fields from 
+    global list
+    """
+    for i in range(dbptr.query('dbRECORD_COUNT')):
+        print " - Working on record %d" % i
+        dbptr[3] = i
+        for f in fields:
+            value = dbptr.getv(f)[0]
+            print "  \t%s\t\t%s" % (f, value)
+    return True
+
+def process_groups(dbptr):
+    """Process each group
+    in turn by subsetting
+    """
+    for i in range(dbptr.query('dbRECORD_COUNT')):
+        dbptr[3] = i
+        sub_sta = dbptr.getv('sta')[0]
+        print "- Process group for sta %s" % sub_sta
+        dbptr_sub = datascope.dbsubset(dbptr, 'sta=~/%s' % sub_sta)
+        dbptr_sub.ungroup()
+        process_per_station(dbptr_sub)
+    return True
+
+def infinite_loop(dbptr):
+    """Make an infinite
+    loop to demostrate 
+    Python memory blow up
+    """
+    while True:
+        process_groups(dbptr)
+
+def main():
+    """Open up demo database
+    tables and group, then 
+    run infinite loop
+    """
+    dbpath = '%s/demo/socalif/db/scdemo' % os.environ['ANTELOPE']
+    print dbpath
+    db = datascope.dbopen(dbpath, 'r')
+    db.lookup('', 'snetsta', '', '')
+    db.join('sitechan')
+    db.sort(('snet','sta'))
+    db.group('sta')
+    infinite_loop(db)
+
+if __name__ == '__main__':
+    main()
