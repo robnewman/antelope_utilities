@@ -37,24 +37,11 @@ def update():
     print hp.heap()
     hp.setref()
 
-def process_per_station(dbptr):
-    """Process per station
-    and print fields from 
-    global list
-    """
-    for i in range(dbptr.query('dbRECORD_COUNT')):
-        print " - Working on record %d" % i
-        dbptr[3] = i
-        for f in fields:
-            value = dbptr.getv(f)[0]
-            print "  \t%s\t\t%s" % (f, value)
-    if heapy_loaded:
-        update()
-    return True
-
 def process_groups(dbptr):
     """Process each group
     in turn by subsetting
+    then ungroup and print
+    out values
     """
     for i in range(dbptr.query('dbRECORD_COUNT')):
         dbptr[3] = i
@@ -62,7 +49,15 @@ def process_groups(dbptr):
         print "- Process group for sta %s" % sub_sta
         dbptr_sub = datascope.dbsubset(dbptr, 'sta=~/%s' % sub_sta)
         dbptr_sub.ungroup()
-        process_per_station(dbptr_sub)
+        for j in range(dbptr_sub.query('dbRECORD_COUNT')):
+            print " - Working on record %d" % j
+            dbptr_sub[3] = j
+            for f in fields:
+                value = dbptr_sub.getv(f)[0]
+                print "  \t%s\t\t%s" % (f, value)
+        if heapy_loaded:
+            update()
+        dbptr_sub.free()
     return True
 
 def infinite_loop(dbptr):
@@ -86,6 +81,7 @@ def main():
     db.sort(('snet','sta'))
     db.group('sta')
     infinite_loop(db)
+    db.free()
 
 if __name__ == '__main__':
     main()
