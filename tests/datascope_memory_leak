@@ -37,22 +37,20 @@ def update():
     print hp.heap()
     hp.setref()
 
-def infinite_loop():
+def infinite_loop(dbptr):
     """Make an infinite
     loop to demostrate 
     Python memory blow up
     """
     while True:
-        dbpath = '%s/demo/socalif/db/scdemo' % os.environ['ANTELOPE']
-        db = datascope.dbopen(dbpath, 'r')
-        db.lookup('', 'snetsta', '', '')
-        db.join('sitechan')
-        db.sort(('snet','sta'))
-        db.group('sta')
-        for i in range(db.query('dbRECORD_COUNT')):
-            db[3] = i
-            sub_sta = db.getv('sta')[0]
-            db_sub = datascope.dbsubset(db, 'sta=~/%s' % sub_sta)
+        dbptr.lookup('', 'snetsta', '', '')
+        dbptr.join('sitechan')
+        dbptr.sort(('snet','sta'))
+        dbptr.group('sta')
+        for i in range(dbptr.query('dbRECORD_COUNT')):
+            dbptr[3] = i
+            sub_sta = dbptr.getv('sta')[0]
+            db_sub = datascope.dbsubset(dbptr, 'sta=~/%s' % sub_sta)
             db_sub.ungroup()
             for j in range(db_sub.query('dbRECORD_COUNT')):
                 db_sub[3] = j
@@ -61,14 +59,17 @@ def infinite_loop():
                 if heapy_loaded:
                     update()
             db_sub.free()
-        db.free()
+        dbptr.free()
 
 def main():
     """Open up demo database
     tables and group, then 
     run infinite loop
     """
-    infinite_loop()
+    dbpath = '%s/demo/socalif/db/scdemo' % os.environ['ANTELOPE']
+    db = datascope.dbopen(dbpath, 'r')
+    infinite_loop(db)
+    db.close()
 
 if __name__ == '__main__':
     main()
