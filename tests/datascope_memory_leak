@@ -50,7 +50,7 @@ def infinite_loop(dbptr):
         for i in range(dbptr.query('dbRECORD_COUNT')):
             dbptr[3] = i
             sub_sta = dbptr.getv('sta')[0]
-            db_sub = datascope.dbsubset(dbptr, 'sta=~/%s' % sub_sta)
+            db_sub = datascope.dbsubset(dbptr, 'sta=~/%s/' % sub_sta)
             db_sub.ungroup()
             for j in range(db_sub.query('dbRECORD_COUNT')):
                 db_sub[3] = j
