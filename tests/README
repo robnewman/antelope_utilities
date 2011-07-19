@@ -1,0 +1,5 @@
+This script demostrates a small memory leak in the Python interface
+due to the lack of dbfree() doing what it is advertised to do.
+After a couple thousand iterations of the infinite_loop() in 
+the script you will see the Python process gradually ballooning
+in memory size.
