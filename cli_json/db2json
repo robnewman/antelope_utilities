@@ -8,12 +8,12 @@ Summary & individual created via cron once a day
 @author   Rob Newman <robertlnewman@gmail.com> 858.822.1333
 @version  2.0
 @license  MIT style license
-@modified 2011-07-12
+@modified 2011-07-18
 @notes    1. Rewrite to only have dbpointers open for a short while - Datascope 
           does not like realtime dbs being open when edits can happen (dbpointers
           all become invalid and the script crashes)
           2. Datascope does not correctly free up memory. Triage this by forcing
-          memory cleanup with dbfree(), dbclose() and del() commands. This goes
+          memory cleanup with datascope.dbfree() and datascope.dbclose(). This goes
           against Pythonic Principles (Python has dynamic garbage collection) but
           until underlying Datascope memory leaks are fixed, this is a stop-gap.
 """
@@ -44,7 +44,7 @@ detail_dbmaster_fields = core_fields + ["sta", "ondate", "offdate", "elev", "end
 detail_dbmaster_adopt_fields  = adopt_fields + ["sta", "ondate", "offdate", "elev", "endtime", "equip_install", "equip_remove", "cert_time", "commtype", "provider", "power", "dutycycle", "insname"]
 detail_inst_hist_fields = ["insname", "instype", "ssident", "chan", "hang", "vang", "sitechan.ondate", "sitechan.offdate", "gtype", "idtag"]
 detail_deployment_hist_fields = ["time", "endtime", "vnet", "cert_time", "decert_time"]
-detail_comms_hist_fields = ["comm.time", "comm.endtime", "commtype", "provider", "power", "dutycycle"]
+detail_comms_hist_fields = ["time", "endtime", "commtype", "provider", "power", "dutycycle"]
 detail_baler_fields = ["model", "firm", "nreboot", "last_reboot", "ssident"]
 detail_dlevents = ["dlevtype", "dlcomment"]
 
@@ -210,7 +210,7 @@ class NetworkSummary:
         self.verbose = verbose
         self.debug = debug
 
-    def test_db(self):
+    def open_db(self):
         """Test that the database pointer
         is valid
         """
@@ -221,20 +221,15 @@ class NetworkSummary:
             exit()
         else:
             self.db = db
-            return True
 
-    def table_pointers(self):
-        """Open up pointers to
-        all the relevant tables
+    def close_db(self):
+        """Close the open database 
+        pointer. This will free() all
+        dbpointers in memory
         """
-        self.dlsensor_dbptr = datascope.dblookup(self.db, '', 'dlsensor', '', '')
-        self.dlsite_dbptr = datascope.dblookup(self.db, '', 'dlsite', '', '')
-        self.infra_dbptr = datascope.dblookup(self.db, '', 'sitechan', '', '')
-        self.baler_dbptr = datascope.dblookup(self.db, '', 'stabaler', '', '')
-        self.comm_dbptr = datascope.dblookup(self.db, '', 'comm', '', '')
-        q330_comm_dbptr = datascope.dblookup(self.db, '', 'q330comm', '', '')
-        q330_comm_dbptr.sort('ssident', unique=True)
-        self.q330comm_dbptr = q330_comm_dbptr
+        if self.db:
+            db = self.db
+            db.close()
 
     def idtag_determiner(self, dlogger_id):
         """The idtag field is only
@@ -243,26 +238,54 @@ class NetworkSummary:
         q330comm first used 2006.
         Try q330comm first.
         """
-        dbptr = datascope.dbsubset(self.q330comm_dbptr, 'ssident=~/%s/' % dlogger_id)
+        dbptr = datascope.dblookup(self.db, '', 'q330comm', '', '')
+        dbptr.sort('ssident', unique=True)
+        dbptr.subset('ssident=~/%s/' % dlogger_id)
         if dbptr.query('dbRECORD_COUNT') > 0:
             dbptr[3] = 0
             idtag = dbptr.getv('idtag')[0]
         else:
             idtag = 'N/A'
-        datascope.dbfree(dbptr)
+        dbptr.free()
         return idtag
 
     def create_instrument_history(self):
-        """Open the sitechan table then
-        outer join on site, sensor and instrument
-        then return the pointer
+        """Open the snetsta table then
+        join on stage, dlsensor and sitechan
+        using very specific join keys (including
+        time ranges). Then get histories for 
+        all stations, returning dictionary
         """
-        dbptr = datascope.dblookup(self.dbptr, '', 'snetsta', '', '')
-        dbptr.join('stage')
-        dbptr.subset('snet=~/TA/ && chan=~/BH.*/ && gtype=~/digitizer/')
-        dbptr.join('dlsensor', pattern1=['ssident', 'time::endtime'], pattern2=['dlident', 'time::endtime'])
-        dbptr.join('sitechan', pattern1=['sta', 'chan', 'time::endtime'], pattern2=['sta', 'chan', 'ondate::offdate'])
-        self.instrument_history_dbptr = dbptr
+        if self.verbose:
+            print " - Working on create_instrument_history for all stations"
+        instrument_history = {}
+        inst_hist_dbptr = datascope.dblookup(self.dbptr, '', 'snetsta', '', '')
+        inst_hist_dbptr.join('stage')
+        inst_hist_dbptr.subset('snet=~/TA/ && chan=~/BH.*/ && gtype=~/digitizer/')
+        inst_hist_dbptr.join('dlsensor', pattern1=['ssident', 'time::endtime'], pattern2=['dlident', 'time::endtime'])
+        inst_hist_dbptr.join('sitechan', pattern1=['sta', 'chan', 'time::endtime'], pattern2=['sta', 'chan', 'ondate::offdate'])
+        inst_hist_dbptr.sort(('sta','time'))
+        inst_hist_grp_dbptr = datascope.dbgroup(inst_hist_dbptr, 'sta')
+        for i in range(inst_hist_grp_dbptr.query('dbRECORD_COUNT')):
+            inst_hist_grp_dbptr[3] = i
+            sta, [db, view, end_rec, start_rec] = inst_hist_grp_dbptr.getv('sta', 'bundle')
+            # Generate all keys for the dictionary
+            if self.verbose:
+                print "  - create_instrument_history(): Processing station %s" % sta
+            instrument_history[sta] = []
+            for j in range(start_rec, end_rec):
+                inst_hist_dbptr[3] = j
+                my_sub_dict = {}
+                snet, sta, chan, time, ssident, dlmodel, snmodel, snident, ondate, offdate, hang, vang, descrip = inst_hist_dbptr.getv('snet', 'sta', 'chan', 'time', 'ssident', 'dlmodel', 'snmodel', 'snident', 'ondate', 'offdate', 'hang', 'vang', 'descrip' )
+                this_sensor = self.sensor_readable(snmodel)
+                this_datalogger = self.datalogger_readable(dlmodel)
+                datalogger_idtag = self.idtag_determiner(ssident)
+                sensor = {'model':this_sensor[0], 'css':this_sensor[1], 'ssident':snident}
+                datalogger = { 'model':this_datalogger[0], 'css':this_datalogger[1], 'ssident':ssident, 'idtag':datalogger_idtag}
+                instrument_history[sta].append({'channel':chan, 'hang':hang, 'vang':vang, 'sensor':sensor, 'datalogger':datalogger, 'ondate':ondate, 'offdate':offdate})
+        inst_hist_grp_dbptr.free()
+        inst_hist_dbptr.free()
+        return instrument_history
 
     def create_deploy_pointer(self):
         """Create a pointer to the
@@ -273,16 +296,51 @@ class NetworkSummary:
         dbptr.join('deployment', outer=True)
         self.deploy_dbptr = dbptr
 
+    def get_metadata(self):
+        """Get all the meta data values for
+        all fields of a database pointer, 
+        including dbNULL, dbFIELD_DETAIL,
+        dbFIELD_DESCRIPTION, dbFIELD_TYPE
+        """
+        if self.verbose:
+            print " - Determining all null values, detail, descriptions and field types for schema"
+        self.dbmeta = {}
+        dbmeta = self.db
+        for table in dbmeta.query('dbSCHEMA_TABLES'):
+            dbmeta.lookup('', table, '', '')
+            try:
+                dbmeta.query('dbTABLE_FIELDS')
+            except:
+                pass
+            else:
+                for field in dbmeta.query('dbTABLE_FIELDS'):
+                    if field not in self.dbmeta:
+                        dbmeta.lookup('', '', field, 'dbNULL')
+                        self.dbmeta[field] = {'null':'', 'detail':'', 'description':'', 'field_type':''}
+                        try:
+                            dbmeta.getv(field)
+                        except:
+                            pass
+                        else: 
+                            self.dbmeta[field]['null'] = dbmeta.getv(field)[0]
+                            self.dbmeta[field]['detail'] = dbmeta.query('dbFIELD_DETAIL')
+                            self.dbmeta[field]['description'] = dbmeta.query('dbFIELD_DESCRIPTION')
+                            self.dbmeta[field]['field_type'] = dbmeta.query('dbFIELD_TYPE')
+        datascope.dbfree(dbmeta)
+        if debug:
+            print "Metadata dictionary:\n"
+            print self.dbmeta
+
     def field_definitions(self, dbptr, field):
         """Define what each field key 
         should be and what it should return
         """
         field_object = {}
-        field_pointer = datascope.dblookup(dbptr, '', '', field, 'dbNULL' )
-        detail = field_pointer.query('dbFIELD_DETAIL')
-        description = field_pointer.query('dbFIELD_DESCRIPTION')
-        field_type = field_pointer.query('dbFIELD_TYPE')
-        null = field_pointer.getv(field)[0]
+        if field in self.dbmeta:
+            detail = self.dbmeta[field]['detail']
+            description = self.dbmeta[field]['description']
+            field_type = self.dbmeta[field]['field_type']
+            null = self.dbmeta[field]['null']
         value = dbptr.getv(field)[0]
         field_readable = '%s_readable' % field
         if value == null:
@@ -337,8 +395,6 @@ class NetworkSummary:
         field_object['value'] = value
         if debug:
             print field_object
-        # datascope.dbfree(field_pointer)
-        del field_pointer
         return field_object
 
     def process_decom_stations(self, field_list):
@@ -373,7 +429,6 @@ class NetworkSummary:
                 else:
                     decom_dict[sta][df] = df_obj[df_readable_field]
         datascope.dbfree(db_decom)
-        del db_decom
         return decom_dict
 
     def process_adopted_stations(self, field_list):
@@ -415,7 +470,6 @@ class NetworkSummary:
                 else:
                     adopt_dict[sta][adf] = adf_obj[adf_readable_field]
         datascope.dbfree(db_adopt)
-        del db_adopt
         return adopt_dict
 
     def process_active_stations(self, field_list):
@@ -456,93 +510,76 @@ class NetworkSummary:
                 else:
                     active_dict[sta][af] = af_obj[af_readable_field]
         datascope.dbfree(db_active)
-        del db_active
         return active_dict
+#
+#    def instrument_history(self, sta, intype='summary'):
+#        """Return dictionary of instrument history
+#        Have to use BHN or BNE (not BHZ) for sensor history
+#        as sensor resets are typically E-W or N-S
+#        This is a little more complex than the usual grouped
+#        records, so cannot use utility function process_grouped_records()
+#        """
+#        inst_list = []
+#        inst_hist = datascope.dbsubset(self.instrument_history_dbptr, 'sta =~ /%s/' % sta)
+#        inst_hist.sort('ondate')
+#        for i in range(inst_hist.query('dbRECORD_COUNT')):
+#            inst_hist[3] = i
+#            snet, sta, chan, time, ssident, dlmodel, snmodel, snident, ondate, offdate, hang, vang, descrip = inst_hist.getv('snet', 'sta', 'chan', 'time', 'ssident', 'dlmodel', 'snmodel', 'snident', 'ondate', 'offdate', 'hang', 'vang', 'descrip' )
+#            this_sensor = self.sensor_readable(snmodel)
+#            this_datalogger = self.datalogger_readable(dlmodel)
+#            datalogger_idtag = self.idtag_determiner(ssident)
+#            sensor = {'model':this_sensor[0], 'css':this_sensor[1], 'ssident':snident}
+#            datalogger = { 'model':this_datalogger[0], 'css':this_datalogger[1], 'ssident':ssident, 'idtag':datalogger_idtag}
+#            inst_list.append({'channel':chan, 'hang':hang, 'vang':vang, 'sensor':sensor, 'datalogger':datalogger, 'ondate':ondate, 'offdate':offdate})
+#        datascope.dbfree(inst_hist)
+#        if intype == 'summary':
+#            return inst_list.pop()
+#        elif intype == 'detail':
+#            return inst_list
 
-    def instrument_history(self, sta, intype='summary'):
-        """Return dictionary of instrument history
-        Have to use BHN or BNE (not BHZ) for sensor history
-        as sensor resets are typically E-W or N-S
-        This is a little more complex than the usual grouped
-        records, so cannot use utility function process_grouped_records()
-        """
-        inst_list = []
-        inst_hist = datascope.dbsubset(self.instrument_history_dbptr, 'sta =~ /%s/' % sta)
-        inst_hist.sort('ondate')
-        for i in range(inst_hist.query('dbRECORD_COUNT')):
-            inst_hist[3] = i
-            snet, sta, chan, time, ssident, dlmodel, snmodel, snident, ondate, offdate, hang, vang, descrip = inst_hist.getv('snet', 'sta', 'chan', 'time', 'ssident', 'dlmodel', 'snmodel', 'snident', 'ondate', 'offdate', 'hang', 'vang', 'descrip' )
-            this_sensor = self.sensor_readable(snmodel)
-            this_datalogger = self.datalogger_readable(dlmodel)
-            datalogger_idtag = self.idtag_determiner(ssident)
-            sensor = {'model':this_sensor[0], 'css':this_sensor[1], 'ssident':snident}
-            datalogger = { 'model':this_datalogger[0], 'css':this_datalogger[1], 'ssident':ssident, 'idtag':datalogger_idtag}
-            inst_list.append({'channel':chan, 'hang':hang, 'vang':vang, 'sensor':sensor, 'datalogger':datalogger})
-        datascope.dbfree(inst_hist)
-        if intype == 'summary':
-            return inst_list.pop()
-        elif intype == 'detail':
-            return inst_list
-
-    def baler_history(self, sta, btype):
+    def baler_history(self):
         """Retrieve and return baler history 
         depending on query type
         """
+        if self.verbose:
+            print " - Working on baler_history for all stations"
         baler_dict = {}
+        stabaler_ptr = datascope.dblookup(self.db, '', 'stabaler', '', '')
+        stabaler_ptr.sort(('dlsta','time'))
         try:
-            baler_sub = datascope.dbsubset(self.baler_dbptr, 'sta=~/%s/' % sta)
-        except:
-            print "baler_history(): Error - no records for station %s" % sta
-        else:
-            try:
-                baler_dict = self.process_grouped_records(baler_sub, 'time', btype, detail_baler_fields)
-            except LookupError,e:
-                print 'baler_history(): Error for station %s: %s: %s' % (sta, LookupError, e)
-            datascope.dbfree(baler_sub)
-            del baler_sub
-            return baler_dict
+            baler_dict = self.process_grouped_records(stabaler_ptr, 'dlsta', detail_baler_fields)
+        except LookupError,e:
+            print 'baler_history(): LookupError: %s' % (e)
+        stabaler_ptr.free()
+        return baler_dict
 
-    def process_grouped_records(self, dbpt, dict_key, ret_type, my_fields):
+    def process_grouped_records(self, dbpt, dict_key, my_fields):
         """Process groups of records
         """
         my_dict = {}
-        if dbpt.query('dbRECORD_COUNT') > 0:
-            dbpt.sort(dict_key)
-            dbpt.group(dict_key)
-            for i in range(dbpt.query('dbRECORD_COUNT')):
-                dbpt[3] = i
-                mysub = dbpt.getv(dict_key)[0]
-                mysub_int = int(mysub)
-                if dict_key == 'time':
-                    sub_expr = '%.5f' % mysub
-                elif dict_key == 'ondate':
-                    sub_expr = '%d' % mysub
-                this_group = datascope.dbsubset(dbpt, '%s == %s' % (dict_key, sub_expr))
-                try:
-                    this_group.ungroup()
-                except Exception,e:
-                    print "     - Dbungroup failed with exception: %s:%s" % (Exception, e)
-                else:
-                    if debug:
-                        print "     - There are %d records in this bundle" % this_group.query('dbRECORD_COUNT')
-                    my_dict[mysub_int] = {}
-                    for j in range(this_group.query('dbRECORD_COUNT')):
-                        this_group[3] = j
-                        for f in my_fields:
-                            my_f_obj = self.field_definitions(this_group, f)
-                            readable_field = '%s_readable' % f
-                            my_dict[mysub_int][f] = my_f_obj[readable_field]
-            if ret_type == 'summary':
-                dict_items = my_dict.keys()
-                dict_items.sort()
-                recent_key = dict_items.pop()
-                return my_dict[recent_key]
-            elif ret_type == 'detail':
-                return my_dict
+        my_group = datascope.dbgroup(dbpt, dict_key)
+        if my_group.query('dbRECORD_COUNT') > 0:
+            for i in range(my_group.query('dbRECORD_COUNT')):
+                my_group[3] = i
+                my_dict_key, [db, view, end_rec, start_rec] = my_group.getv(dict_key, 'bundle')
+                # my_bundle is a list describing a view where
+                # [ db, view, end_rec, start_rec ]
+                # Make a list - simplest to sort
+                # Generate all keys for the dictionary
+                my_dict[my_dict_key] = []
+                for j in range(start_rec, end_rec):
+                    dbpt[3] = j
+                    my_sub_dict = {}
+                    for f in my_fields:
+                        my_f_obj = self.field_definitions(dbpt, f)
+                        readable_field = '%s_readable' % f
+                        my_sub_dict[f] = my_f_obj[readable_field]
+                    my_dict[my_dict_key].append(my_sub_dict)
+            return my_dict
         else:
             raise LookupError('No groupable records for this station')
 
-    def infrasound_sensors(self, sta, imap, itype):
+    def infrasound_sensors(self, imap):
         """Determine what infrasound sensors are installed for both
         summary JSON and detailed station JSON files
         Kind of a mess right now due to how the channels map to one
@@ -552,168 +589,186 @@ class NetworkSummary:
         records, so cannot use utility function process_grouped_records()
         """
         qstr = '|'.join([ '|'.join(v) for k,v in imap.iteritems()]) # Build the Datascope query str
-        infra_sensors_dict = {}
-        infrachans_holder = {} # Temporaray list
+        if self.verbose:
+            print "  - infrasound_sensors(): Searching sitechan table for chans that match: %s" % qstr
+        infrasound_history = {}
+        infra_hist_dbptr = datascope.dblookup(self.db, '', 'sitechan', '', '')
         try:
-            dbpt_sub = datascope.dbsubset(self.infra_dbptr, 'sta=~/%s/ && chan=~/(%s)/' % (sta, qstr))
+            infra_hist_dbptr.subset('chan=~/(%s)/' % qstr)
         except Exception,e:
-            print "        - %s: Dbsubset on sitechan table failed for station %s with the exception: %s" % (Exception, sta, e)
+            print "  - infrasound_sensors(): Error: subset on sitechan table failed with exception: %s" % e
         else:
-            if dbpt_sub.query('dbRECORD_COUNT') > 0:
-                if debug:
-                    print "  - infrasound_sensors(): There are %d records" % dbpt_sub.query('dbRECORD_COUNT')
-                dbpt_sub.sort('ondate')
-                dbpt_sub.group('ondate')
-                for i in range(dbpt_sub.query('dbRECORD_COUNT')):
-                    dbpt_sub[3] = i
-                    iondate = dbpt_sub.getv('ondate')
-                    iondate_key = int(iondate[0])
-                    infrachans_holder[iondate_key] = [] # Holds the channels
-                    infra_sensors_dict[iondate_key] = [] # Will hold the final sensor values
-                    dbpt_time_sub = datascope.dbsubset(dbpt_sub, 'ondate==%s' % iondate)
-                    dbpt_time_sub.ungroup()
-                    for j in range(dbpt_time_sub.query('dbRECORD_COUNT')):
-                        dbpt_time_sub[3] = j
-                        infrachans_holder[iondate_key].append(dbpt_time_sub.getv('chan')[0])
-                    datascope.dbfree(dbpt_time_sub)
-                    del dbpt_time_sub
-                for ondate,chans in infrachans_holder.iteritems():
+            if debug:
+                print "  - infrasound_sensors(): There are %d records" % infra_hist_dbptr.query('dbRECORD_COUNT')
+            infra_hist_dbptr.sort(('sta', 'ondate'))
+            infra_hist_grp_dbptr = datascope.dbgroup(infra_hist_dbptr, 'sta')
+            for i in range(infra_hist_grp_dbptr.query('dbRECORD_COUNT')):
+                infra_hist_grp_dbptr[3] = i
+                sta, [db, view, end_rec, start_rec] = infra_hist_grp_dbptr.getv('sta', 'bundle')
+                # Generate all keys for the dictionary
+                if self.debug:
+                    print "  - infrasound_sensors(): Processing station %s" % sta
+                infrasound_history[sta] = []
+                # Generate temporary dictionary for (1) all infra channels, and (2) all offdates
+                infrachans_holder = {}
+                infraoffdates_holder = {}
+                # Process all records per station
+                for j in range(start_rec, end_rec):
+                    infra_hist_dbptr[3] = j
+                    my_sub_dict = {}
+                    ondate, offdate, chan = infra_hist_dbptr.getv('ondate', 'offdate', 'chan')
+                    if offdate == self.dbmeta['offdate']['null']:
+                        offdate = 'N/A'
+                    if not ondate in infrachans_holder:
+                       infrachans_holder[ondate] = []
+                       infraoffdates_holder[ondate] = offdate
+                    infrachans_holder[ondate].append(chan)
+                # Now process items in temporary chans holder
+                for ondate, chans in infrachans_holder.iteritems():
                     list_holder = []
-                    for sentype,senchans in imap.iteritems():
+                    for sentype, senchans in imap.iteritems():
                         for k in senchans:
                             if k in chans:
                                 list_holder.append(sentype)
                     uniq_list = list(set(list_holder))
-                    infra_sensors_dict[ondate] = uniq_list
-                datascope.dbfree(dbpt_sub)
-                del dbpt_sub
-
-                # Remap dictionary values
-                for ondate,sentype in infra_sensors_dict.iteritems():
-                    all_sens = ' '.join(sentype)
+                    all_sens = ' '.join(uniq_list)
                     if ('MEMS' in all_sens) and ('SETRA' in all_sens) and ('NCPA' in all_sens):
-                        infra_sensors_dict[ondate] = 'complete'
+                        infrasound_history[sta].append({'ondate':ondate, 'offdate':infraoffdates_holder[ondate], 'chans':'complete'})
                     elif 'MEMS' in all_sens:
-                        infra_sensors_dict[ondate] = 'mems'
+                        infrasound_history[sta].append({'ondate':ondate, 'offdate':infraoffdates_holder[ondate], 'chans':'mems'})
                     else:
-                        infra_sensors_dict[ondate] = 'none'
+                        infrasound_history[sta].append({'ondate':ondate, 'offdate':infraoffdates_holder[ondate], 'chans':'none'})
+            infra_hist_grp_dbptr.free()
+            infra_hist_dbptr.free()
+            return infrasound_history
 
-                if itype == 'summary':
-                    infra_dict_items = infra_sensors_dict.keys()
-                    infra_dict_items.sort()
-                    recent_key = infra_dict_items.pop()
-                    return infra_sensors_dict[recent_key]
-                elif itype == 'detail':
-                    return infra_sensors_dict
-            else:
-                return 'unknown'
-
-    def deployment_history(self, sta):
+    def deployment_history(self):
         """Return the deployment
-        history
+        history as a dictionary
         """
+        if self.verbose:
+            print "  - Working on deployment_history for all stations"
         deploy_hist_dict = {}
-        deploy = datascope.dbsubset(self.deploy_dbptr, 'sta =~ /%s/' % sta)
-        deploy.sort(['time'])
-        if verbose:
-            print "  - Work through %d deployment history entries" % deploy.query('dbRECORD_COUNT')
-        for i in range(deploy.query('dbRECORD_COUNT')):
-            deploy[3] = i
-            for ddhf in detail_deployment_hist_fields:
-                ddhf_obj = self.field_definitions(deploy, ddhf)
-                ddhf_readable_field = '%s_readable' % ddhf
-                deploy_hist_dict[ddhf] = ddhf_obj[ddhf_readable_field]
-        datascope.dbfree(deploy)
-        del deploy
+        deploy_ptr = datascope.dbsort(self.deploy_dbptr, ('sta', 'time'))
+        deploy_grp_ptr = datascope.dbgroup(deploy_ptr, 'sta')
+        for i in range(deploy_grp_ptr.query('dbRECORD_COUNT')):
+            deploy_grp_ptr[3] = i
+            sta, [db, view, end_rec, start_rec] = deploy_grp_ptr.getv('sta', 'bundle')
+            # Only create dictionary entry if more than one deployment
+            if (end_rec - start_rec) > 1:
+                deploy_hist_dict[sta] = []
+                for j in range(start_rec, end_rec):
+                    per_deploy_dict = {}
+                    deploy_ptr[3] = j
+                    for ddhf in detail_deployment_hist_fields:
+                        ddhf_obj = self.field_definitions(deploy_ptr, ddhf)
+                        ddhf_readable_field = '%s_readable' % ddhf
+                        per_deploy_dict[ddhf] = ddhf_obj[ddhf_readable_field]
+                    deploy_hist_dict[sta].append(per_deploy_dict)
+        deploy_grp_ptr.free()
+        deploy_ptr.free()
         return deploy_hist_dict
 
-    def comms_history(self, sta):
+    def comms_history(self):
         """Return the communications
-        history
+        history as a dictionary
         """
+        if self.verbose:
+            print "  - Working on comms_history for all stations"
         comms_dict = {}
-        dbpt_sub = datascope.dbsubset(self.comm_dbptr, 'sta=~/%s/' % sta )
-        dbpt_sub.sort(("time"))
-        for i in range(dbpt_sub.query('dbRECORD_COUNT')):
-            comms_dict[i] = {}
-            dbpt_sub[3] = i
-            for dchf in detail_comms_hist_fields:
-                dchf_obj = self.field_definitions(dbpt_sub, dchf)
-                dchf_readable_field = '%s_readable' % dchf
-                if dchf == 'provider' or dchf == 'commtype':
-                    comms_dict[i][dchf] = {}
-                    comms_dict[i][dchf]['value'] = dchf_obj['readable']
-                    comms_dict[i][dchf]['css'] = dchf_obj['css']
-                else:
-                    comms_dict[i][dchf] = dchf_obj[dchf_readable_field]
-        datascope.dbfree(dbpt_sub)
-        del dbpt_sub
+        comms_ptr = datascope.dblookup(self.db, '', 'comm', '', '')
+        comms_ptr.sort(('sta','time'))
+        comms_grp_ptr = datascope.dbgroup(comms_ptr, 'sta')
+        for i in range(comms_grp_ptr.query('dbRECORD_COUNT')):
+            comms_grp_ptr[3] = i
+            sta, [db, view, end_rec, start_rec] = comms_grp_ptr.getv('sta', 'bundle')
+            comms_dict[sta] = []
+            per_sta_comms_dict = {}
+            for j in range(start_rec, end_rec):
+                comms_ptr[3] = j
+                for dchf in detail_comms_hist_fields:
+                    dchf_obj = self.field_definitions(comms_ptr, dchf)
+                    dchf_readable_field = '%s_readable' % dchf
+                    if dchf == 'provider' or dchf == 'commtype':
+                        per_sta_comms_dict[dchf] = {}
+                        per_sta_comms_dict[dchf]['value'] = dchf_obj['readable']
+                        per_sta_comms_dict[dchf]['css'] = dchf_obj['css']
+                    else:
+                        per_sta_comms_dict[dchf] = dchf_obj[dchf_readable_field]
+                comms_dict[sta].append(per_sta_comms_dict)
+        comms_grp_ptr.free()
+        comms_ptr.free()
         return comms_dict
 
-    def calibration_history(self, sta, dbptr):
+    def calibration_history(self, dbpath):
         """Return calibration history
         This is a little more complex than the usual grouped
         records, so cannot use utility function process_grouped_records()
         """
-        calib_dict = {}
-        calib_sub = datascope.dbsubset(dbptr, 'sta =~ /%s/' % sta)
-        if calib_sub.query('dbRECORD_COUNT') > 0:
-            calib_sub.sort('time')
-            if verbose:
-                print "    - There are %d total calibrations" % calib_sub.query('dbRECORD_COUNT')
-            calib_sub.group('time')
-            if verbose:
-                print "    - There are %d grouped records" % calib_sub.query('dbRECORD_COUNT')
-            for i in range(calib_sub.query('dbRECORD_COUNT')):
-                if verbose:
-                    print "     - Going through group %d" % i
-                calib_sub[3] = i
-                calib_time = calib_sub.getv('time')
-                calib_time_int = int(calib_time[0])
-                this_calib = datascope.dbsubset(calib_sub, 'time == %.5f' % calib_time[0]) 
-                try:
-                    this_calib.ungroup()
-                except Exception,e:
-                    print "     - Dbungroup failed for calibration history at station %s, time %s with exception: %s:%s" % (sta, epoch2str(calib_time_int, '%Y-%m-%d %H:%M:%S'), Exception, e)
-                else:
-                    if debug:
-                        print "     - There are %d records in this bundle" % this_calib.query('dbRECORD_COUNT')
-                    calib_dict[calib_time_int] = {}
-                    for j in range(this_calib.query('dbRECORD_COUNT')):
-                        this_calib[3] = j
-                        this_calib_chan = str(this_calib.getv('chan')[0])
-                        calib_dict[calib_time_int][this_calib_chan] = {}
-                        calib_dict[calib_time_int][this_calib_chan]['file'] = this_calib.extfile()
-        else:
-            print "     - No calibrations for station %s" % sta
-        datascope.dbfree(calib_sub)
-        del calib_sub
-        return calib_dict
+        if self.verbose:
+            print " - Working on calibration_history for all stations"
+        calibration_dict = {}
+        calib_ptr = datascope.dbopen(dbpath, 'r')
+        calib_ptr.lookup(table='calplot')
+        calib_ptr.sort(('sta', 'time'))
+        calib_grp_ptr = datascope.dbgroup(calib_ptr, 'sta')
+        if self.debug:
+            print "  - calibration_history(): There are %d grouped records" % calib_grp_ptr.query('dbRECORD_COUNT')
+        for i in range(calib_grp_ptr.query('dbRECORD_COUNT')):
+            calib_grp_ptr[3] = i
+            sta, [db, view, end_rec, start_rec] = calib_grp_ptr.getv('sta', 'bundle')
+            if self.debug:
+                print "   - calibration_history(): Processing station %s" % sta
+            calibration_dict[sta] = []
+            # Temporaray holder dictionary
+            calib_holder = {}
+            for j in range(start_rec, end_rec):
+                calib_ptr[3] = j
+                chan, time = calib_ptr.getv('chan', 'time')
+                time_int = int(time)
+                if not time_int in calib_holder:
+                    calib_holder[time_int] = []
+                calib_holder[time_int].append({'chan':chan, 'file':calib_ptr.extfile()})
+            # Sort the dictionary and append to list
+            for key in sorted(calib_holder.iterkeys()):
+                calibration_dict[sta].append({'time':key,'chanfiles':calib_holder[key]})
+        calib_grp_ptr.free()
+        calib_ptr.close()
+        return calibration_dict
 
-    def dlevents(self, sta, dbptr):
+    def dlevents_history(self, dbpath):
         """Return all datalogger
-        events
+        events for all stations
+        as a dictionary
         """
+        if self.verbose:
+            print " - Working on dlevent_history for all stations"
         dlevents_dict = {}
-        dlevs_sub = datascope.dbsubset(dbptr, 'dlname =~ /TA_%s' % sta)
-        dlevs_sub.sort('time')
-        for i in range(dlevs_sub.query('dbRECORD_COUNT')):
-            dlevs_sub[3] = i
-            dlevs_time = dlevs_sub.getv('time')
-            dlevs_time_int = int(dlevs_time[0])
-            dlevs_year, dlevs_month = epoch2str(dlevs_time_int,"%Y_%L").split('_')
-            dlevs_month = dlevs_month.strip()
-            if dlevs_year not in dlevents_dict:
-                dlevents_dict[dlevs_year] = {}
-            if dlevs_month not in dlevents_dict[dlevs_year]:
-                dlevents_dict[dlevs_year][dlevs_month] = {}
-            dlevents_dict[dlevs_year][dlevs_month][dlevs_time_int] = {}
-            for ddle in detail_dlevents:
-                my_ddle_obj = self.field_definitions(dlevs_sub, ddle)
-                readable_field = '%s_readable' % ddle
-                dlevents_dict[dlevs_year][dlevs_month][dlevs_time_int][ddle] = my_ddle_obj[readable_field]
-        datascope.dbfree(dlevs_sub)
-        del dlevs_sub
+        dlevs_ptr = datascope.dbopen(dbpath, 'r')
+        dlevs_ptr.lookup(table='dlevent')
+        dlevs_ptr.sort(('dlname','time'))
+        dlevs_grp_ptr = datascope.dbgroup(dlevs_ptr, 'dlname')
+        for i in range(dlevs_grp_ptr.query('dbRECORD_COUNT')):
+            dlevs_grp_ptr[3] = i
+            dlname, [db, view, end_rec, start_rec] = dlevs_grp_ptr.getv('dlname', 'bundle')
+            dlevents_dict[dlname] = {}
+            for j in range(start_rec, end_rec):
+                dlevs_ptr[3] = j
+                time = dlevs_ptr.getv('time')[0]
+                time_int = int(time)
+                year, month = epoch2str(time,"%Y_%L").split('_')
+                month = month.strip()
+                if year not in dlevents_dict[dlname]:
+                    dlevents_dict[dlname][year] = {}
+                if month not in dlevents_dict[dlname][year]:
+                    dlevents_dict[dlname][year][month] = {}
+                dlevents_dict[dlname][year][month][time_int] = {}
+                for ddle in detail_dlevents:
+                    my_ddle_obj = self.field_definitions(dlevs_ptr, ddle)
+                    readable_field = '%s_readable' % ddle
+                    dlevents_dict[dlname][year][month][time_int][ddle] = my_ddle_obj[readable_field]
+        dlevs_grp_ptr.free()
+        dlevs_ptr.close()
         return dlevents_dict
 
     def sensor_readable(self, insname):
@@ -721,6 +776,8 @@ class NetworkSummary:
         Force match to be a string in case of just int
         values in the regex
         """
+        smodel = False
+        sclass = False
         l_insname = insname.lower()
         for k in self.pf['sensors']:
             for match in self.pf['sensors'][k]['regex']:
@@ -728,6 +785,7 @@ class NetworkSummary:
                     smodel = self.pf['sensors'][k]['name']
                     sclass = k
         if not smodel:
+            print "sensor_readable(): Error: instrument %s is not one of the options!" % insname
             smodel = 'unknown'
         if not sclass:
             sclass = 'unknown'
@@ -738,6 +796,8 @@ class NetworkSummary:
         Force match to be a string in case of just int
         values in the regex
         """
+        dmodel = False
+        dclass = False
         l_insname = insname.lower()
         for k in self.pf['dataloggers']:
             for match in self.pf['dataloggers'][k]['regex']:
@@ -745,6 +805,7 @@ class NetworkSummary:
                     dmodel = self.pf['dataloggers'][k]['name']
                     dclass = k
         if not dmodel:
+            print "datalogger_readable(): Error: instrument %s is not one of the options!" % insname
             dmodel = 'unknown'
         if not dclass:
             dclass = 'unknown'
@@ -796,54 +857,68 @@ def main():
     orbstatus.update(myorb.orb_interaction(usarray_orb, usarray_orb_stations_select))
     orbstatus.update(myorb.orb_interaction(cascadia_orb, cascadia_orb_stations_select))
 
-    db = NetworkSummary(dbmaster, stapf)
-    db.test_db()
-    db.table_pointers()
-    db.create_instrument_history()
+    if verbose:
+        db = NetworkSummary(dbmaster, stapf, verbose=True)
+    else:
+        db = NetworkSummary(dbmaster, stapf)
+
+    print "- Summary JSON file processing"
+    db.open_db()
+    db.get_metadata()
     db.create_deploy_pointer()
     station_dict['decom'] = db.process_decom_stations('summary')
     station_dict['adopt'] = db.process_adopted_stations('summary')
     station_dict['active'] = db.process_active_stations('summary')
+    instrument_history = db.create_instrument_history()
+    baler_history = db.baler_history()
+    infrasound_history = db.infrasound_sensors(infrasound_mapping)
 
-    print " - Decom stations: Add instruments and balers"
+    print " - Decom stations: Add most recent instrument & baler history"
     for sta in sorted(station_dict['decom'].iterkeys()):
+        dlsta = '%s_%s' % (station_dict['decom'][sta]['snet'], sta)
+        if verbose:
+            print "  - Processing decom station: %s" % sta
         if station_dict['decom'][sta]['snet'] == 'TA':
             try:
-                summary_inst_hist_dict = db.instrument_history(sta, 'summary')
+                recent_inst_hist = instrument_history[sta].pop()
             except LookupError,e:
                 print "instrument_history(): LookupError: %s" % e
             else:
                 station_dict['decom'][sta]['sensor'] = {}
                 station_dict['decom'][sta]['datalogger'] = {}
-                station_dict['decom'][sta]['sensor']['value'] = summary_inst_hist_dict['sensor']['model']
-                station_dict['decom'][sta]['sensor']['css'] = summary_inst_hist_dict['sensor']['css']
-                station_dict['decom'][sta]['datalogger']['value'] = summary_inst_hist_dict['datalogger']['model']
-                station_dict['decom'][sta]['datalogger']['css'] = summary_inst_hist_dict['datalogger']['css']
-            station_dict['decom'][sta]['baler'] = db.baler_history(sta, 'summary')
+                station_dict['decom'][sta]['sensor']['value'] = recent_inst_hist['sensor']['model']
+                station_dict['decom'][sta]['sensor']['css'] = recent_inst_hist['sensor']['css']
+                station_dict['decom'][sta]['datalogger']['value'] = recent_inst_hist['datalogger']['model']
+                station_dict['decom'][sta]['datalogger']['css'] = recent_inst_hist['datalogger']['css']
+            if dlsta in baler_history:
+                station_dict['decom'][sta]['baler'] = baler_history[dlsta].pop()
 
-    print " - Active stations: Add instruments and balers"
+    print " - Active stations: Add most recent instrument & baler history"
     for sta in sorted(station_dict['active'].iterkeys()):
+        dlsta = '%s_%s' % (station_dict['active'][sta]['snet'], sta)
+        if verbose:
+            print "  - Processing active station: %s" % sta
         station_dict['active'][sta]['orbstat'] = myorb.add_orbstat(orbstatus, sta)
         if station_dict['active'][sta]['snet'] == 'TA':
             try:
-                summary_inst_hist_dict = db.instrument_history(sta, 'summary')
+                recent_inst_hist = instrument_history[sta].pop()
             except LookupError,e:
                 print "instrument_history(): LookupError: %s" % e
             else:
                 station_dict['active'][sta]['sensor'] = {}
                 station_dict['active'][sta]['datalogger'] = {}
-                station_dict['active'][sta]['sensor']['value'] = summary_inst_hist_dict['sensor']['model']
-                station_dict['active'][sta]['sensor']['css'] = summary_inst_hist_dict['sensor']['css']
-                station_dict['active'][sta]['datalogger']['value'] = summary_inst_hist_dict['datalogger']['model']
-                station_dict['active'][sta]['datalogger']['css'] = summary_inst_hist_dict['datalogger']['css']
-            station_dict['active'][sta]['infrasound'] = db.infrasound_sensors(sta, infrasound_mapping, 'summary')
-            station_dict['active'][sta]['baler'] = db.baler_history(sta, 'summary')
-        else:
-            station_dict['active'][sta]['infrasound'] = 'unknown'
-            station_dict['active'][sta]['baler'] = 'unknown'
+                station_dict['active'][sta]['sensor']['value'] = recent_inst_hist['sensor']['model']
+                station_dict['active'][sta]['sensor']['css'] = recent_inst_hist['sensor']['css']
+                station_dict['active'][sta]['datalogger']['value'] = recent_inst_hist['datalogger']['model']
+                station_dict['active'][sta]['datalogger']['css'] = recent_inst_hist['datalogger']['css']
+            if sta in infrasound_history:
+                station_dict['active'][sta]['infrasound'] = infrasound_history[sta].pop()
+            if dlsta in baler_history:
+                station_dict['active'][sta]['baler'] = baler_history[dlsta].pop()
+    db.close_db()
 
     if verbose:
-        print " - Create main JSON file for all stations"
+        print " - Dump summary JSON file for all stations"
     f = open(all_stations_json_file+'+', 'w') 
     json.dump(station_dict, f, sort_keys=True, indent=2)
     f.flush()
@@ -851,24 +926,31 @@ def main():
     try:
         os.rename(all_stations_json_file+'+', all_stations_json_file)
     except OSError:
-        print "  - Cannot rename JSON file. Permissions problem?"
+        print "  - Cannot rename summray JSON file. Permissions problem?"
 
     if zipper:
         if verbose:
             print "- Create gzip file: %s.gz" % all_stations_json_file
         zip_me_up(all_stations_json_file)
 
-    print "\n - Start to create individual station JSON files at %s" % strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
+    print "- Start to create individual station JSON files at %s" % strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
     # Create list of the station types to process in detail
     if not subtype or subtype == 'all':
         my_station_types = ['decom', 'adopt', 'active']
     else:
         my_station_types = [subtype]
     persta = NetworkSummary(dbmaster, stapf)
-    persta.test_db()
-    persta.table_pointers()
-    persta.create_instrument_history()
+    persta.open_db()
+    persta.get_metadata()
     persta.create_deploy_pointer()
+    instrument_history = persta.create_instrument_history()
+    baler_history = persta.baler_history()
+    infrasound_history = persta.infrasound_sensors(infrasound_mapping)
+    calibration_history = persta.calibration_history(calibrations)
+    dlevents_history = persta.dlevents_history(dbops_q330)
+    comms_history = persta.comms_history()
+    deployment_history = persta.deployment_history()
+
     # Process each station type
     for sta_type in my_station_types:
         print "  - Start working on %s stations at %s" % (sta_type, strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime()))
@@ -880,6 +962,7 @@ def main():
             sta_type_dict = persta.process_active_stations('detail')
 
         for sta in sorted(sta_type_dict.iterkeys()):
+            dlsta = '%s_%s' % (sta_type_dict[sta]['snet'], sta)
             sta_dict = {
                 "baler_history": {}, 
                 "calibration_history": {}, 
@@ -889,12 +972,6 @@ def main():
                 "instrument_history": {}, 
                 "metadata": {}
             }
-            # Extra dbpointers
-            calib_ptr = datascope.dbopen(calibrations, 'r')
-            calib_ptr.lookup('', 'calplot', '', '')
-            dlevents_ptr = datascope.dbopen(dbops_q330, 'r')
-            dlevents_ptr.lookup('', 'dlevent', '', '')
-
             if verbose:
                 print "  - Processing station detail for %s" % sta
                 print "   - Map stype_dict[%s] to this_sta_dict['metadata']" % sta
@@ -903,45 +980,34 @@ def main():
             if verbose:
                 print "   - Current instrumentation"
             try:
-                summary_inst_hist_dict = persta.instrument_history(sta, 'summary')
+                recent_inst_hist = instrument_history[sta][-1]
             except LookupError,e:
                 print "instrument_history(): LookupError: %s" % e
             else:
                 sta_dict['metadata']['sensor'] = {}
                 sta_dict['metadata']['datalogger'] = {}
-                sta_dict['metadata']['sensor']['value'] = summary_inst_hist_dict['sensor']['model']
-                sta_dict['metadata']['sensor']['css'] = summary_inst_hist_dict['sensor']['css']
-                sta_dict['metadata']['datalogger']['value'] = summary_inst_hist_dict['datalogger']['model']
-                sta_dict['metadata']['datalogger']['css'] = summary_inst_hist_dict['datalogger']['css']
+                sta_dict['metadata']['sensor']['value'] = recent_inst_hist['sensor']['model']
+                sta_dict['metadata']['sensor']['css'] = recent_inst_hist['sensor']['css']
+                sta_dict['metadata']['datalogger']['value'] = recent_inst_hist['datalogger']['model']
+                sta_dict['metadata']['datalogger']['css'] = recent_inst_hist['datalogger']['css']
 
             if sta_dict['metadata']['snet'] == 'TA':
-                sta_dict['infrasound_history'] = persta.infrasound_sensors(sta, infrasound_mapping, 'detail')
-                sta_dict['baler_history'] = persta.baler_history(sta, 'detail')
-                if verbose:
-                    print "   - Full instrument history..."
-                try:
-                    sta_dict['instrument_history'] = persta.instrument_history(sta, 'detail')
-                except LookupError,e:
-                    print "LookupError: %s" % e
-                    sta_dict['instrument_history'] = {}
+                if sta in infrasound_history:
+                    sta_dict['infrasound_history'] = infrasound_history[sta]
+                if dlsta in baler_history:
+                    sta_dict['baler_history'] = baler_history[dlsta]
+                if sta in instrument_history:
+                    sta_dict['instrument_history'] = instrument_history[sta]
+                if sta in calibration_history:
+                    sta_dict['calibration_history'] = calibration_history[sta]
+                if sta in dlevents_history:
+                    sta_dict['dlevents'] = dlevents_history[dlsta]
 
-                if verbose:
-                    print "   - Calibrations..."
-                sta_dict['calibration_history'] = persta.calibration_history(sta, calib_ptr)
+            if sta in comms_history:
+                sta_dict['comms_history'] = comms_history[sta]
 
-                if verbose:
-                    print "   - Dlevents..."
-                sta_dict['dlevents'] = persta.dlevents(sta, dlevents_ptr)
-
-            if verbose:
-                print "   - Comms history..."
-            sta_dict['comms_history'] = persta.comms_history(sta)
-
-            if sta_type == 'adopt':
-                if verbose:
-                    print "   - Deployment history..."
-                sta_dict['deployment_history'] = {}
-                sta_dict['deployment_history'] = persta.deployment_history(sta)
+            if sta in deployment_history:
+                sta_dict['deployment_history'] = deployment_history[sta]
 
             if verbose:
                 print "   - Per station JSON file..."
@@ -955,11 +1021,10 @@ def main():
             except OSError,e:
                 print "- Renaming JSON file to %s failed" % sta_file
 
-            datascope.dbfree(calib_ptr)
-            datascope.dbfree(dlevents_ptr)
-            del calib_ptr, dlevents_ptr
-
+    persta.close_db()
     print "End of script at time %s" % strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
+    return 0
 
 if __name__ == '__main__':
-    main()
+    status = main()
+    sys.exit(status)
