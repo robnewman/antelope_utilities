@@ -37,7 +37,8 @@ from stock import pfupdate, pfget
 # Get command line arguments
 usage = "Usage: %prog [options]"
 parser = OptionParser(usage=usage)
-parser.add_option("-v", action="store_true", dest="verbose", help="verbose output", default=False)
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="verbose output", default=False)
+parser.add_option("-s", "--station", action="store", dest="station_override", help="station override", default=False)
 parser.add_option("-t", "--type", action="store", type="string", dest="qtype", help="type of Flickr query", default=False)
 parser.add_option("-x", "--debug", action="store_true", dest="debug", help="debug script", default=False)
 (options, args) = parser.parse_args()
@@ -45,6 +46,10 @@ if options.verbose:
     verbose = True
 else:
     verbose = False
+if options.station_override:
+    station = options.station_override
+else:
+    station = False
 if options.qtype:
     qtype = options.qtype
 else:
@@ -64,10 +69,10 @@ admin_email = pfget(common_pf, 'admin_email')
 json_file_path = '%s/stations/stations.json' % cache_json
 
 # Variables
-api_key = ''
-api_secret = ''
-token = ''
-myid = ''
+api_key = '12d733afde188c65c8dd8683df7f12e2'
+api_secret = 'e6244353de4f3361'
+token = '833039-37f3537105cfcd72'
+myid = '30452022@N00'
 all_tags = ['top_pick','LN','LW','LE','LS']
 flickr_url_path = "http://farm%s.static.flickr.com/%s/%s_%s.jpg"
 tester_tags = {
@@ -86,7 +91,7 @@ else:
     recipients = '%s,hafner@iris.edu,reyes@ucsd.edu' % admin_email # Comma seperated list
 sys.path.append(os.getcwd() + '/bin/py_flickr_1.1/')
 
-def time_test(my_sta_dict):
+def time_test(my_sta_dict, sta_type):
     """Does the station 
     (only AZ or TA right now)
     pass the time test?
@@ -98,7 +103,6 @@ def time_test(my_sta_dict):
             print "   - Time %s cannot be converted to a struct_time" % my_sta_dict["decert_time"]
         else:
             if mktime(struct_time) > then:
-                print "   - Adding %s station %s to list of stations to check" % (sta_type, key)
                 return True
     return False
 
@@ -119,7 +123,7 @@ def build_stalist(json_dict):
                     sta_list.append(sta_name)
                 else:
                     if sta_type == 'adopt' or sta_type == 'decom':
-                        if time_test(json_dict[sta_type][sta_name]):
+                        if time_test(json_dict[sta_type][sta_name], sta_type):
                             sta_list.append(sta_name)
                     else:
                         sta_list.append(sta_name)
@@ -183,48 +187,49 @@ def delete_local_flickr_img(img_path, img_id):
     response_list = []
     for entry in glob.glob(img_path):
         if(entry.count(img_id) == 0 ):
-            response_list.append("  - Warning: Pre-existing file %s that is no longer valid. Deleting..." % entry)
+            response_list.append("  - Warning: Pre-existing file %s that is no longer valid. Deleting...\n" % entry)
             try:
                 os.remove(entry)
             except OSError, e:
-                response_list.append("  - Error: %s occurred when trying to delete the file %s" % (e.errno, entry))
+                response_list.append("  - Error: %s occurred when trying to delete the file %s\n" % (e.errno, entry))
         else:
             statinfo = os.stat(entry)
             if( statinfo.st_size < 1 ):
-                response_list.append("  - Warning: Pre-existing file %s has a file size of zero! Deleting..." % entry)
+                response_list.append("  - Warning: Pre-existing file %s has a file size of zero! Deleting...\n" % entry)
                 try:
                     os.remove(entry)
                 except OSError, e:
-                    response_list.append("  - Error: %s occurred when trying to delete the file %s" % (e.errno, entry))
+                    response_list.append("  - Error: %s occurred when trying to delete the file %s\n" % (e.errno, entry))
 
-    if len(response_list) > 0:
-        response_str = "\n".join(response_list)
-        if verbose:
-            print response_str
+    if len(response_list) > 0 and verbose:
+        response_str = "".join(response_list)
         return response_str
     else:
-        return "  - Notice: Nothing to delete"
+        return ""
 
 def download_flickr_img(img_path, photo):
     """Attempt to download the photo from 
     Flickr to a local file system
     """
+    response_list = []
     if not os.path.exists(img_path):
         my_file = flickr_url_path % (photo['farm'], photo['server'], photo['id'], photo['secret'])
         try:
-            myfile = urllib2.urlopen(my_file).read()
+            downloaded = urllib2.urlopen(my_file).read()
         except urllib2.URLError:
             print urllib2_URLError
         except:
-            response_str = "  - Unknown saving error for %s" % my_file
+            response_list.append("  - Unknown saving error for %s\n" % my_file)
         else:
             save = open(img_path, 'wb')
-            savestr = str(my_file)
+            savestr = str(downloaded)
             save.write(savestr)
             save.close()
-            response_str = '  - Saving photo: %s' % my_file
+            response_list.append('  - Saving photo: %s\n' % my_file)
     else:
-        response_str = '  - Image %s already exists. Ignoring.' % img_path
+        response_list.append('  - Image %s already exists. Ignoring.\n' % img_path)
+    if len(response_list) > 0 and verbose:
+        response_str = "".join(response_list)
     if verbose:
         print response_str
     return response_str
@@ -247,23 +252,28 @@ def flickr_photo_retrieval(sta):
             mytags = '%s, %s' % (the_sta_tag, the_auth_tag)
             try:
                 search = flickr.photos_search(user_id=myid, tags=mytags, tag_mode='all', per_page='10')
-            except AttributeError,e:
-                print "Error: %s" % e
+            except AttributeError, e:
+                print "AttributeError: %s" % e
+            except IOError, e:
+                print "IOError: %s" % e
             else:
                 if len(search.photos) > 1:
                     print "  - Warning: %d different photos match the tag query %s. This will cause duplication errors. Please fix." % (len(search.photos), mytags)
                 # Grab all matching photos
                 try:
                     photo = search.photos[0].photo[0]
-                except AttributeError,e:
+                except AttributeError, e:
                     print "Attribute Error: %s" % e
+                except IOError, e:
+                    print "IOError: %s" % e
                 else:
                     img = '%s/%s_%s_%s.jpg' % (photo_path, sta, all_tags[i], photo['id'])
                     greedy_file_search = '%s/%s*_%s_*.jpg' % (photo_path, sta, all_tags[i])
                     query_output.append(delete_local_flickr_img(greedy_file_search, photo['id']))
                     query_output.append(download_flickr_img(img, photo))
-    if verbose:
-        return query_output
+    if len(query_output) > 0 and verbose:
+        query_str = "".join(query_output)
+        return query_str
     else:
         return "   - Complete...\n"
 
@@ -273,7 +283,10 @@ def main():
     grab photos from Flickr
     """
     t0 = strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
-    file_sta_list = json_stalist(json_file_path)
+    if station:
+        file_sta_list = [station]
+    else:
+        file_sta_list = json_stalist(json_file_path)
     threads = []
     if verbose:
         print '- Flickr Python Photo Downloader started at %s' % t0
@@ -293,12 +306,10 @@ def main():
             threads.append(p)
             try:
                 ret_vals = parent_conn.recv()
-                for r_v in ret_vals:
-                    out_str += r_v
                 out_str += ret_vals
                 p.join()
             except TypeError as type_err:
-                out_str += "Station %s: Connection recv() type error: %s" % (mysta, type_err)
+                out_str += "Station %s: Connection recv() type error: %s\n" % (mysta, type_err)
         else:
             for thread in threads:
                 if not thread.is_alive():
