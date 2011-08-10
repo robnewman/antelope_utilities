@@ -69,10 +69,10 @@ admin_email = pfget(common_pf, 'admin_email')
 json_file_path = '%s/stations/stations.json' % cache_json
 
 # Variables
-api_key = '12d733afde188c65c8dd8683df7f12e2'
-api_secret = 'e6244353de4f3361'
-token = '833039-37f3537105cfcd72'
-myid = '30452022@N00'
+api_key = 'NULL'
+api_secret = 'NULL'
+token = 'NULL'
+myid = 'NULL'
 all_tags = ['top_pick','LN','LW','LE','LS']
 flickr_url_path = "http://farm%s.static.flickr.com/%s/%s_%s.jpg"
 tester_tags = {
