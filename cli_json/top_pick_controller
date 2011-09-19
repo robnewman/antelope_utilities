@@ -217,7 +217,7 @@ def download_flickr_img(img_path, photo):
         try:
             downloaded = urllib2.urlopen(my_file).read()
         except urllib2.URLError:
-            print urllib2_URLError
+            print urllib2.URLError
         except:
             response_list.append("  - Unknown saving error for %s\n" % my_file)
         else:
@@ -248,14 +248,16 @@ def flickr_photo_retrieval(sta):
             query_output.append('  - No photo for %s: %s\n' % (sta, all_tags[i]))
         else:
             if debug:
-                print '  - Using tags %s, %s' % (the_auth_tag, the_sta_tag)
-            mytags = '%s, %s' % (the_sta_tag, the_auth_tag)
+                print "  - Using tags %s, %s" % (the_auth_tag, the_sta_tag)
+            mytags = "%s, %s" % (the_sta_tag, the_auth_tag)
             try:
                 search = flickr.photos_search(user_id=myid, tags=mytags, tag_mode='all', per_page='10')
+            except flickr.FlickError, e:
+                print "  - The FlickrAPI photo search for tags '%s, %s' encountered the error: %s" % (the_auth_tag, the_sta_tag, e)
             except AttributeError, e:
-                print "AttributeError: %s" % e
+                print "  - AttributeError: %s" % e
             except IOError, e:
-                print "IOError: %s" % e
+                print "  - IOError: %s" % e
             else:
                 if len(search.photos) > 1:
                     print "  - Warning: %d different photos match the tag query %s. This will cause duplication errors. Please fix." % (len(search.photos), mytags)
