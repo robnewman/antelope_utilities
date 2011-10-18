@@ -29,7 +29,7 @@ import gzip
 sys.path.append(os.environ['ANTELOPE'] + '/local/data/python/antelope')
 import datascope
 import orb
-from stock import pfupdate, pfget, epoch2str, epoch
+from stock import pfupdate, pfget, epoch2str, epoch, str2epoch, strtime, yearday
 from optparse import OptionParser
 from time import time, gmtime, strftime
 
@@ -258,33 +258,92 @@ class NetworkSummary:
         """
         if self.verbose:
             print " - Working on create_instrument_history for all stations"
+
+        # Get whole dlsensor table into simple per snident_dlident keyed list
+        dlsensor_history = {}
+        dlsensor_hist_dbptr = datascope.dblookup(self.dbptr, '', 'dlsensor', '', '') 
+        for i in range(dlsensor_hist_dbptr.query('dbRECORD_COUNT')):
+            dlsensor_hist_dbptr[3] = i 
+            dlsen_dlmodel, dlsen_dlident, dlsen_chident, dlsen_time, dlsen_endtime, dlsen_snmodel, dlsen_snident = dlsensor_hist_dbptr.getv('dlmodel', 'dlident', 'chident', 'time', 'endtime', 'snmodel', 'snident')
+            new_key = dlsen_snident + ' ' + dlsen_dlident
+            dlsensor_history[new_key] = {'dlmodel':dlsen_dlmodel, 'dlident':dlsen_dlident, 'chident':dlsen_chident, 'time':dlsen_time, 'endtime':dlsen_endtime, 'snmodel':dlsen_snmodel, 'snident':dlsen_snident}
+        # Get whole sitechan table into simple per station list
         instrument_history = {}
-        inst_hist_dbptr = datascope.dblookup(self.dbptr, '', 'snetsta', '', '')
-        inst_hist_dbptr.join('stage')
-        inst_hist_dbptr.subset('snet=~/TA/ && chan=~/BH.*/ && gtype=~/digitizer/')
-        inst_hist_dbptr.join('dlsensor', pattern1=['ssident', 'time::endtime'], pattern2=['dlident', 'time::endtime'])
-        inst_hist_dbptr.join('sitechan', pattern1=['sta', 'chan', 'time::endtime'], pattern2=['sta', 'chan', 'ondate::offdate'])
-        inst_hist_dbptr.sort(('sta','time'))
-        inst_hist_grp_dbptr = datascope.dbgroup(inst_hist_dbptr, 'sta')
-        for i in range(inst_hist_grp_dbptr.query('dbRECORD_COUNT')):
-            inst_hist_grp_dbptr[3] = i
-            sta, [db, view, end_rec, start_rec] = inst_hist_grp_dbptr.getv('sta', 'bundle')
-            # Generate all keys for the dictionary
+        sitechan_hist_dbptr = datascope.dblookup(self.dbptr, '', 'sitechan', '', '') 
+        sitechan_hist_dbptr.subset('chan=~/^(BH|HN).*/')
+        sitechan_hist_dbptr.sort(('sta', 'ondate', 'chan'))
+        sitechan_hist_grp_dbptr = datascope.dbgroup(sitechan_hist_dbptr, 'sta')
+        for i in range(sitechan_hist_grp_dbptr.query('dbRECORD_COUNT')):
+            sitechan_hist_grp_dbptr[3] = i 
+            sta, [db, view, end_rec, start_rec] = sitechan_hist_grp_dbptr.getv('sta', 'bundle')
             if self.verbose:
-                print "  - create_instrument_history(): Processing station %s" % sta
+                print " - create_instrument_history(): Processing station %s" % sta
             instrument_history[sta] = []
             for j in range(start_rec, end_rec):
-                inst_hist_dbptr[3] = j
-                my_sub_dict = {}
-                snet, sta, chan, time, ssident, dlmodel, snmodel, snident, ondate, offdate, hang, vang, descrip = inst_hist_dbptr.getv('snet', 'sta', 'chan', 'time', 'ssident', 'dlmodel', 'snmodel', 'snident', 'ondate', 'offdate', 'hang', 'vang', 'descrip' )
-                this_sensor = self.sensor_readable(snmodel)
-                this_datalogger = self.datalogger_readable(dlmodel)
-                datalogger_idtag = self.idtag_determiner(ssident)
-                sensor = {'model':this_sensor[0], 'css':this_sensor[1], 'ssident':snident}
-                datalogger = { 'model':this_datalogger[0], 'css':this_datalogger[1], 'ssident':ssident, 'idtag':datalogger_idtag}
-                instrument_history[sta].append({'channel':chan, 'hang':hang, 'vang':vang, 'sensor':sensor, 'datalogger':datalogger, 'ondate':ondate, 'offdate':offdate})
-        inst_hist_grp_dbptr.free()
-        inst_hist_dbptr.free()
+                sitechan_hist_dbptr[3] = j 
+                site_chan, site_ondate, site_offdate, site_descrip, site_hang, site_vang = sitechan_hist_dbptr.getv('chan', 'ondate', 'offdate', 'descrip', 'hang', 'vang')
+                if site_descrip != '' and len(site_descrip) > 1:
+                    site_sensorid, site_dloggerid = site_descrip.split()
+                    if site_descrip in dlsensor_history:
+
+                        this_sensor = self.sensor_readable(dlsensor_history[site_descrip]['snmodel'])
+                        this_datalogger = self.datalogger_readable(dlsensor_history[site_descrip]['dlmodel'])
+                        datalogger_idtag = self.idtag_determiner(dlsensor_history[site_descrip]['dlident'])
+
+                        sensor = {
+                            'model':this_sensor[0], 
+                            'css':this_sensor[1], 
+                            'ssident':dlsensor_history[site_descrip]['snident']
+                        }
+                        datalogger = {
+                            'model':this_datalogger[0], 
+                            'css':this_datalogger[1], 
+                            'ssident':dlsensor_history[site_descrip]['dlident'],
+                            'idtag':datalogger_idtag
+                        }
+
+                        instrument_history[sta].append({
+                            'channel':site_chan,
+                            'ondate':site_ondate,
+                            'offdate':site_offdate,
+                            'snmodel':dlsensor_history[site_descrip]['snmodel'],
+                            'sensor_id':dlsensor_history[site_descrip]['snident'],
+                            'dlmodel':dlsensor_history[site_descrip]['dlmodel'],
+                            'dlogger_id':dlsensor_history[site_descrip]['dlident'],
+                            'snident':dlsensor_history[site_descrip]['snident'],
+                            'chident':dlsensor_history[site_descrip]['chident'],
+                            'hang':site_hang,
+                            'vang':site_vang,
+                            'datalogger':datalogger,
+                            'sensor':sensor
+
+                        })
+                    else:
+                        instrument_history[sta].append({
+                            'channel':site_chan, 
+                            'ondate':site_ondate, 
+                            'offdate':site_offdate, 
+                            'descrip':site_descrip, 
+                            'sensor_id':site_sensorid, 
+                            'dlogger_id':site_dloggerid,
+                            'hang':site_hang,
+                            'vang':site_vang,
+                            'datalogger': {'model':'', 'css':'', 'ssident':'', 'idtag':''},
+                            'sensor': {'model':'', 'css':'', 'ssident':''}
+                        })
+                else:
+                    instrument_history[sta].append({
+                        'channel':site_chan, 
+                        'ondate':site_ondate, 
+                        'offdate':site_offdate, 
+                        'descrip':site_descrip,
+                        'hang':site_hang,
+                        'vang':site_vang,
+                        'datalogger': {'model':'', 'css':'', 'ssident':'', 'idtag':''},
+                        'sensor': {'model':'', 'css':'', 'ssident':''}
+                    })
+        sitechan_hist_grp_dbptr.free()
+        sitechan_hist_dbptr.free()
         return instrument_history
 
     def create_deploy_pointer(self):
@@ -330,6 +389,7 @@ class NetworkSummary:
         if debug:
             print "Metadata dictionary:\n"
             print self.dbmeta
+        return self.dbmeta
 
     def field_definitions(self, dbptr, field):
         """Define what each field key 
@@ -600,44 +660,47 @@ class NetworkSummary:
         else:
             if debug:
                 print "  - infrasound_sensors(): There are %d records" % infra_hist_dbptr.query('dbRECORD_COUNT')
-            infra_hist_dbptr.sort(('sta', 'ondate'))
+            infra_hist_dbptr.sort(('sta', 'ondate', 'chan'))
             infra_hist_grp_dbptr = datascope.dbgroup(infra_hist_dbptr, 'sta')
             for i in range(infra_hist_grp_dbptr.query('dbRECORD_COUNT')):
                 infra_hist_grp_dbptr[3] = i
                 sta, [db, view, end_rec, start_rec] = infra_hist_grp_dbptr.getv('sta', 'bundle')
                 # Generate all keys for the dictionary
-                if self.debug:
+                if self.verbose:
                     print "  - infrasound_sensors(): Processing station %s" % sta
-                infrasound_history[sta] = []
-                # Generate temporary dictionary for (1) all infra channels, and (2) all offdates
-                infrachans_holder = {}
-                infraoffdates_holder = {}
+                infrasound_history[sta] = {'current':[], 'history':{}}
+                infrachans_history_holder = []
                 # Process all records per station
                 for j in range(start_rec, end_rec):
                     infra_hist_dbptr[3] = j
                     my_sub_dict = {}
                     ondate, offdate, chan = infra_hist_dbptr.getv('ondate', 'offdate', 'chan')
+                    my_sub_dict['ondate'] = ondate
+                    my_sub_dict['chan'] = chan
+                    for sentype, senchans in imap.iteritems():
+                        if chan in senchans:
+                            infra_sensor = sentype
+                    my_sub_dict['sensor'] = infra_sensor
+                    if self.verbose and (sta == '442A' or sta == '214A' or sta == 'MDND'):
+                        print infrasound_history[sta]['current']
                     if offdate == self.dbmeta['offdate']['null']:
                         offdate = 'N/A'
-                    if not ondate in infrachans_holder:
-                       infrachans_holder[ondate] = []
-                       infraoffdates_holder[ondate] = offdate
-                    infrachans_holder[ondate].append(chan)
-                # Now process items in temporary chans holder
-                for ondate, chans in infrachans_holder.iteritems():
-                    list_holder = []
-                    for sentype, senchans in imap.iteritems():
-                        for k in senchans:
-                            if k in chans:
-                                list_holder.append(sentype)
-                    uniq_list = list(set(list_holder))
-                    all_sens = ' '.join(uniq_list)
-                    if ('MEMS' in all_sens) and ('SETRA' in all_sens) and ('NCPA' in all_sens):
-                        infrasound_history[sta].append({'ondate':ondate, 'offdate':infraoffdates_holder[ondate], 'chans':'complete'})
-                    elif 'MEMS' in all_sens:
-                        infrasound_history[sta].append({'ondate':ondate, 'offdate':infraoffdates_holder[ondate], 'chans':'mems'})
+                        if not infra_sensor in infrasound_history[sta]['current']:
+                            infrasound_history[sta]['current'].append(infra_sensor)
                     else:
-                        infrasound_history[sta].append({'ondate':ondate, 'offdate':infraoffdates_holder[ondate], 'chans':'none'})
+                        if infra_sensor in infrasound_history[sta]['current']:
+                            infrasound_history[sta]['current'].remove(infra_sensor)
+                    my_sub_dict['offdate'] = offdate
+                    infrachans_history_holder.append(my_sub_dict)
+
+                infrasound_history[sta]['history'] = infrachans_history_holder
+
+                if ('MEMS' in infrasound_history[sta]['current']) and ('SETRA' in infrasound_history[sta]['current']) and ('NCPA' in infrasound_history[sta]['current']):
+                    infrasound_history[sta]['current'] = 'complete'
+                elif 'MEMS' in infrasound_history[sta]['current']:
+                    infrasound_history[sta]['current'] = 'mems'
+                else:
+                    infrasound_history[sta]['current'] = 'none'
             infra_hist_grp_dbptr.free()
             infra_hist_dbptr.free()
             return infrasound_history
@@ -834,7 +897,7 @@ def main():
         print " - Parse configuration parameter file (%s)" % common_pf
     pfupdate(common_pf)
     json_path = '%s/stations' % pfget(common_pf, 'CACHEJSON')
-    all_stations_json_file = '%s/stations.json' % json_path
+    all_stations_json_file = '%s/stations_beta.json' % json_path
     dbmaster = pfget(common_pf, 'USARRAY_DBMASTER')
     q330comms = pfget(common_pf, 'USARRAY_Q330COMMS')
     usarray_orb = pfget(common_pf, 'USARRAY_ORB')
@@ -843,6 +906,9 @@ def main():
     cascadia_orb_stations_select = pfget(common_pf, 'CASCADIA_ORB_STATIONS_SELECT')
     orbstat_alerts = pfget(common_pf, 'ORBSTAT_ALERTS')
     infrasound_mapping = pfget(common_pf, 'INFRASOUND_MAPPING')
+    if verbose:
+        print "  - Infrasound mapping:"
+        print infrasound_mapping
     calibrations = pfget(common_pf, 'DBCALIB')
     dbops_q330 = pfget(common_pf, 'DBOPS_Q330')
     landowner_dir = "%s_local" % pfget(common_pf, 'CACHE_REPORTS_LANDOWNER')
@@ -865,6 +931,7 @@ def main():
     print "- Summary JSON file processing"
     db.open_db()
     db.get_metadata()
+    # metadata = db.get_metadata()
     db.create_deploy_pointer()
     station_dict['decom'] = db.process_decom_stations('summary')
     station_dict['adopt'] = db.process_adopted_stations('summary')
@@ -880,7 +947,7 @@ def main():
             print "  - Processing decom station: %s" % sta
         if station_dict['decom'][sta]['snet'] == 'TA':
             try:
-                recent_inst_hist = instrument_history[sta].pop()
+                recent_inst_hist = instrument_history[sta][-1]
             except LookupError,e:
                 print "instrument_history(): LookupError: %s" % e
             else:
@@ -891,7 +958,16 @@ def main():
                 station_dict['decom'][sta]['datalogger']['value'] = recent_inst_hist['datalogger']['model']
                 station_dict['decom'][sta]['datalogger']['css'] = recent_inst_hist['datalogger']['css']
             if dlsta in baler_history:
-                station_dict['decom'][sta]['baler'] = baler_history[dlsta].pop()
+                station_dict['decom'][sta]['baler'] = baler_history[dlsta][-1]
+            # Need this for most recent sensor in top right
+            if sta in infrasound_history:
+                if 'current' in infrasound_history[sta]:
+                    station_dict['decom'][sta]['infrasound'] = infrasound_history[sta]['current']
+                else:
+                    station_dict['decom'][sta]['infrasound'] = infrasound_history[sta]['history'][-1]
+            else:
+                station_dict['decom'][sta]['infrasound'] = 'unknown'
+
 
     print " - Active stations: Add most recent instrument & baler history"
     for sta in sorted(station_dict['active'].iterkeys()):
@@ -901,7 +977,7 @@ def main():
         station_dict['active'][sta]['orbstat'] = myorb.add_orbstat(orbstatus, sta)
         if station_dict['active'][sta]['snet'] == 'TA':
             try:
-                recent_inst_hist = instrument_history[sta].pop()
+                recent_inst_hist = instrument_history[sta][-1]
             except LookupError,e:
                 print "instrument_history(): LookupError: %s" % e
             else:
@@ -912,9 +988,14 @@ def main():
                 station_dict['active'][sta]['datalogger']['value'] = recent_inst_hist['datalogger']['model']
                 station_dict['active'][sta]['datalogger']['css'] = recent_inst_hist['datalogger']['css']
             if sta in infrasound_history:
-                station_dict['active'][sta]['infrasound'] = infrasound_history[sta].pop()
+                station_dict['active'][sta]['infrasound'] = infrasound_history[sta]['current']
+            else:
+                station_dict['active'][sta]['infrasound'] = 'unknown'
             if dlsta in baler_history:
-                station_dict['active'][sta]['baler'] = baler_history[dlsta].pop()
+                station_dict['active'][sta]['baler'] = baler_history[dlsta][-1]
+        else:
+            station_dict['active'][sta]['infrasound'] = 'unknown'
+            station_dict['active'][sta]['baler'] = 'unknown'
     db.close_db()
 
     if verbose:
@@ -943,9 +1024,9 @@ def main():
     persta.open_db()
     persta.get_metadata()
     persta.create_deploy_pointer()
-    instrument_history = persta.create_instrument_history()
-    baler_history = persta.baler_history()
-    infrasound_history = persta.infrasound_sensors(infrasound_mapping)
+    # instrument_history = persta.create_instrument_history()
+    # baler_history = persta.baler_history()
+    # infrasound_history = persta.infrasound_sensors(infrasound_mapping)
     calibration_history = persta.calibration_history(calibrations)
     dlevents_history = persta.dlevents_history(dbops_q330)
     comms_history = persta.comms_history()
@@ -993,14 +1074,14 @@ def main():
 
             if sta_dict['metadata']['snet'] == 'TA':
                 if sta in infrasound_history:
-                    sta_dict['infrasound_history'] = infrasound_history[sta]
+                    sta_dict['infrasound_history'] = infrasound_history[sta]['history']
                 if dlsta in baler_history:
                     sta_dict['baler_history'] = baler_history[dlsta]
                 if sta in instrument_history:
                     sta_dict['instrument_history'] = instrument_history[sta]
                 if sta in calibration_history:
                     sta_dict['calibration_history'] = calibration_history[sta]
-                if sta in dlevents_history:
+                if dlsta in dlevents_history:
                     sta_dict['dlevents'] = dlevents_history[dlsta]
 
             if sta in comms_history:
