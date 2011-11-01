@@ -1,0 +1,274 @@
+#!/usr/bin/env python
+
+"""
+Create Google map JSON source
+
+@author      Rob Newman <rlnewman@ucsd.edu> x21333
+@version     $Revision$
+@license     MIT-style license
+@copyright   2010 University of Calfornia, San Diego
+
+"""
+
+# Import all the relevant modules
+import sys
+import os
+import json
+import time
+# Load Antelope functions
+sys.path.append(os.environ['ANTELOPE'] + '/local/data/python/antelope')
+from datascope import dbopen, dblookup, dbjoin, dbsubset, dbgroup, dbgetv, dbquery
+from stock import pfget, epoch2str, grname, srname
+from optparse import OptionParser
+
+usage = "Usage: %prog [options]"
+parser = OptionParser(usage=usage)
+parser.add_option("-v", action="store_true", dest="verbose", help="verbose output", default=False)
+parser.add_option("-n", action="store", type="int", dest="number", help="number of events", metavar="", default=False)
+parser.add_option("-t", action="store", type="int", dest="timerange", help="time range", metavar="", default=False)
+parser.add_option("-p", action="store", type="string", dest="profile", help="profile", metavar="", default=False)
+(options, args) = parser.parse_args()
+if options.verbose:
+    verbose = True
+else:
+    verbose = False
+if options.number and options.timerange:
+    parser.error("Options -n and -t are mutually exclusive. Use one or the other.")
+if options.number:
+    override_number = options.number
+else:
+    override_number = False
+if options.timerange:
+    override_timerange = options.timerange
+else:
+    override_timerange = False
+if options.profile:
+    profile = options.profile
+else:
+    profile = "anza"
+
+
+def main():
+    """Main processing script
+    for generating JSON file
+    """
+    # Pull variables from pf
+    profileref = pfget('google_mapfeed.pf', profile)
+    dbname = profileref['dbname']
+    path = profileref['webbase']
+    finalfile = '%s/%s' % (path, profileref['file'])
+    bufferfile = '%s+' % finalfile
+    max_nquakes = 600
+    element_fields = ['lat', 'lon', 'depth', 'time', 'local_timestring', 'utc_timestring', 'magnitude', 'auth']
+
+    if verbose:
+        print "Start: Creating main JSON file '%s' for all stations at %s" % (finalfile, time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime()))
+
+    now = time.time()
+    # Set time zone
+    os.putenv('TZ','US/Pacific')
+    time.tzset()
+    if verbose:
+        print "The time zone is: %s" % (time.tzname)[0]
+        print "The current time is: %s" % now
+
+    # Override defaults
+    if override_number:
+        if verbose:
+            print "Overriding default number of events (%d) with %d" % (max_nquakes, override_number)
+        nquakes = override_number
+    else:
+        nquakes = max_nquakes
+    if override_timerange:
+        if verbose:
+            print "Overiding default number of events (%d) with time range %d seconds" % (max_nquakes, override_timerange)
+        nquakes = False
+
+    # Database processing
+    if verbose:
+        print "Opening database";
+        print "Number of events requested: %s" % nquakes
+    db = dbopen(dbname, 'r')
+
+    '''
+    Occasionally there is more than one magnitude for a single orid
+    (such as provided by QED). We need the most recent magnitude for
+    a given orid, so sort on orid and lddate, then group on orid,
+    then get the most recent record number (greatest lddate) for each
+    group. Add that to a dictionary we will use later.
+    '''
+    netmag_dict = {}
+    db_netmag = dblookup(db, table='netmag')
+    db_netmag.sort(['orid', 'lddate'])
+    db_netmag_grp = dbgroup(db_netmag, 'orid')
+    if verbose:
+        print "There are %s records" % db_netmag_grp.query('dbRECORD_COUNT')
+    for i in range(db_netmag_grp.query('dbRECORD_COUNT')):
+        db_netmag_grp[3] = i
+        orid, [dbptr, view, end_record, start_record] = db_netmag_grp.getv('orid', 'bundle')
+        if verbose:
+            print "\t- Iteration: %s: Orid: %s, Start record: %s, End record: %s"% (i, orid, start_record, end_record)
+        db_netmag[3] = end_record - 1
+        if verbose:
+            print "\t\t- Magnitude: %s, Magtype: %s" % (db_netmag.getv('magnitude')[0], db_netmag.getv('magtype')[0] )
+        magnitude, magtype = db_netmag.getv('magnitude', 'magtype')
+        netmag_dict[orid] = { 'rec':end_record, 'magnitude':magnitude, 'magtype':magtype }
+
+    '''
+    if verbose:
+        for key in sorted(netmag_dict.iterkeys()):
+            print "%s: %s" % (key, netmag_dict[key])
+    '''
+
+    '''
+    Now get the event information
+    '''
+    db.lookup(table='origin')
+    db.join('event')
+    if verbose:
+        print "Number of joined records of event and origin tables: %s" % db.query('dbRECORD_COUNT')
+    if override_timerange:
+        override_oldest = now - override_timerange
+        if verbose:
+            print "Override time defined - get events in the last %s seconds - 'time >= %s'" % (override_timerange, override_oldest)
+        db.subset('time >= %d' % override_oldest)
+        if verbose:
+            print "Subset on time. Number of records: %s" % db.query('dbRECORD_COUNT')
+    # Join views
+    # db_joined = dbjoin(db, db_netmag)
+
+    if verbose:
+        print "Subset orid == prefor"
+    db.subset('orid == prefor')
+    if verbose:
+        print "Number of subsetted records: %s" % db.query('dbRECORD_COUNT')
+        print "Subset for time != NULL"
+    db.subset('time != NULL')
+    if verbose:
+        print "Number of subsetted records: %s" % db.query('dbRECORD_COUNT')
+    # We want the most recent first for the comparison with nquakes
+    db.sort(['time'], reverse=True)
+    if verbose:
+        print "Number of sorted records: %s" % db.query('dbRECORD_COUNT')
+    if nquakes:
+        if db.query('dbRECORD_COUNT') > nquakes:
+            db[3] = nquakes - 1
+            min_time = db.getv('time')[0]
+            db.subset("time >= %s" % min_time)
+    else:
+        override_oldest = now - override_timerange
+        if verbose:
+            print "Override time defined - get events in the last %s seconds - time > %s" % (override_timerange, override_oldest)
+        db.subset("time >= %s" % override_oldest)
+    # Sort in normal time - we want the most recent events plotted on top
+    db.sort(('time'))
+    if verbose:
+        print "Number of records without subset on time: %s" % db.query('dbRECORD_COUNT')
+    '''
+    Build event dictionary
+    '''
+    event_dict = {'metadata':{},'events':{}}
+
+    '''
+    Build metadata dictionary
+    '''
+    if nquakes:
+        event_dict['metadata']['max_nquakes'] = nquakes
+        event_dict['metadata']['oldest_time_readable'] = epoch2str( int(min_time), "%H:%M UTC %A %B %o, %Y" )
+        event_dict['metadata']['oldest_time'] = int(min_time)
+        event_dict['metadata']['type'] = 'event_limited'
+    elif override_oldest:
+        event_dict['metadata']['time_range'] = int(override_timerange)
+        event_dict['metadata']['oldest_time_readable'] = epoch2str( int(override_oldest), "%H:%M UTC %A %B %o, %Y" )
+        event_dict['metadata']['oldest_time'] = int(override_oldest)
+        event_dict['metadata']['type'] = 'time_limited'
+    event_dict['metadata']['modification_time'] = int(time.time())
+    event_dict['metadata']['modification_time_readable'] = epoch2str( int(time.time()), "%H:%M UTC %A %B %o, %Y" )
+
+    '''
+    Build event dictionary
+    '''
+    events = {}
+    for i in range(db.query('dbRECORD_COUNT')):
+        db[3] = i
+        if verbose:
+            epoch_time, orid = db.getv('time', 'orid')
+            print "\tRecord number is: %s Orid is: %d Time is: %s" % (db[3], orid, epoch2str(epoch_time, '%Y-%m-%d %H:%M:%S'))
+
+        orid = db.getv('orid')[0]
+
+        if orid in netmag_dict:
+            events[i] = {}
+            for ef in element_fields:
+                # Parse values
+                if ef is 'local_timestring' or ef is 'utc_timestring' or ef is 'time':
+                    value = dbgetv(db, 'time')[0]
+                    difference = float(now) - float(value)
+                    if difference < 6 * 3600:
+                        color = 'red'
+                    elif difference < 12 * 3600:
+                        color = 'orange'
+                    elif difference < 24 * 3600:
+                        color = 'yellow'
+                    elif difference < 72 * 3600:
+                        color = 'chartreuse'
+                    elif difference < 168 * 3600:
+                        color = 'blue'
+                    else:
+                        color = 'grey'
+                    events[i]['color'] = color
+                elif ef is 'depth':
+                    value = dbgetv(db, 'depth')[0]
+                elif ef is 'auth':
+                    value = dbgetv(db, 'auth')[0]
+                elif ef is 'magnitude':
+                    # Magnitude
+                    # mlval, mbval, msval, magnitudeval, magtypeval = db.getv('ml', 'mb', 'ms', 'magnitude', 'magtype')
+                    # Null magnitude is -999.00
+                    magnitudeval = netmag_dict[orid]['magnitude']
+                    magtypeval  = netmag_dict[orid]['magtype']
+                    if int(magnitudeval) > 0:
+                        scale = magtypeval
+                        value = '%.1f' % magnitudeval
+                    else:
+                        scale = ''
+                        value = 'N/A'
+                    events[i]['scale'] = scale
+                else:
+                    value = dbgetv(db, ef)
+
+                # Override formatting for specific fields
+                if ef is 'lat' or ef is 'lon':
+                    value = '%.4f' % value
+                elif ef is 'local_timestring':
+                    value = epoch2str( value, "%H:%M:%S %Z %A %B %o, %Y", "US/Pacific" )
+                elif ef is 'utc_timestring':
+                    value = epoch2str( value, "%H:%M:%S UTC %A %B %o, %Y" )
+                events[i][ef] = value
+
+            full_lat, full_lon = db.getv('lat', 'lon')
+            events[i]['grname'] = (grname(full_lat,full_lon)).title()
+            events[i]['srname'] = (srname(full_lat,full_lon)).title()
+
+    event_dict['events'] = events
+
+    # Dump JSON file
+    f = open(bufferfile, 'w') 
+    json.dump(event_dict, f, sort_keys=True, indent=2)
+    f.flush()
+
+    # Move the file to replace the older one
+    try:
+        os.rename(bufferfile, finalfile)
+    except OSError:
+        print "Cannot rename JSON file from %s to %s" % (bufferfile,finalfile)
+
+    if verbose:
+        print "End: Creating main JSON file '%s' for all stations %s" % (finalfile, time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime()))
+
+    db.close()
+    return 0
+
+if __name__ == '__main__':
+    status = main()
+    sys.exit(status)
