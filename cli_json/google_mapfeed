@@ -3,8 +3,9 @@
 """
 Create Google map JSON source
 
-@author      Rob Newman <robertlnewman@gmail.com>
-@license     MIT-style license
+@package  Datascope
+@author   Rob Newman <robertlnewman@gmail.com> x21333
+@license  MIT-style license
 """
 
 # Import all the relevant modules
