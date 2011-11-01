@@ -3,11 +3,8 @@
 """
 Create Google map JSON source
 
-@author      Rob Newman <rlnewman@ucsd.edu> x21333
-@version     $Revision$
+@author      Rob Newman <robertlnewman@gmail.com>
 @license     MIT-style license
-@copyright   2010 University of Calfornia, San Diego
-
 """
 
 # Import all the relevant modules
