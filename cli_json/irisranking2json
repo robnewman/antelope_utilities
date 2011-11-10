@@ -21,6 +21,9 @@ import json
 from time import time, gmtime, strftime, strptime, mktime
 from optparse import OptionParser
 import urllib2
+# Load datascope functions
+sys.path.append(os.environ['ANTELOPE'] + '/local/data/python/antelope')
+from stock import pfupdate, pfget, epoch2str, epoch, str2epoch, strtime, yearday
 
 try:
     from BeautifulSoup import BeautifulSoup
@@ -51,6 +54,13 @@ def main():
     """Grab and parse
     source data from IRIS
     """
+    print "Start of script at time %s" % strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
+    if verbose:
+        print " - Parse configuration parameter file (%s)" % common_pf
+    pfupdate(common_pf)
+    json_path = '%s/tools/' % pfget(common_pf, 'CACHEJSON')
+    json_file = '%sstation_ranking/ranking.json' % json_path
+
     mean_noise_levels = 'http://crunch.iris.washington.edu/stationinfo/scripts/gks/MeanNoiseLevels'
     base_prefix = 'http://crunch.iris.washington.edu/stationinfo/TA/rank/PDFMode/PDFMode-'
     base_suffix = '_sec'
@@ -76,9 +86,6 @@ def main():
         'Keep-Alive':keep_alive,
         'Connection':connection
     }
-    json_file = '/var/tmp/ranking.json'
-
-    print "Start of script at time %s" % strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
 
     if verbose or debug:
         print "- 1. Get the mean noise levels into dictionary from file %s" % mean_noise_levels
