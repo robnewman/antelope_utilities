@@ -55,6 +55,7 @@ def main():
     source data from IRIS
     """
     print "Start of script at time %s" % strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
+    common_pf = 'common.pf'
     if verbose:
         print " - Parse configuration parameter file (%s)" % common_pf
     pfupdate(common_pf)
