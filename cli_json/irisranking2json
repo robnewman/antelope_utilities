@@ -1,0 +1,219 @@
+#!/usr/bin/env python
+
+'''
+Simple script for pulling station ranking
+from IRIS DMC tool and save as JSON
+
+@author   Rob Newman <robertlnewman@gmail.com> 858.822.1333
+@version  1.0
+@modified 2011-11-10
+@license  MIT-style license
+@notes    IRIS creates the source files daily at 06:03. If this
+          script is run via cron, it needs to take place after
+          that time.
+'''
+
+# Import modules
+import sys
+import os
+import re
+import json
+from time import time, gmtime, strftime, strptime, mktime
+from optparse import OptionParser
+import urllib2
+
+try:
+    from BeautifulSoup import BeautifulSoup
+except ImportError:
+    print "Import Error: Do you have BeautifulSoup installed correctly?"
+
+# Get command line arguments
+usage = "Usage: %prog [options]"
+parser = OptionParser(usage=usage)
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="verbose output", default=False)
+parser.add_option("-s", "--station", action="store", dest="station_override", help="station override", default=False)
+parser.add_option("-x", "--debug", action="store_true", dest="debug", help="debug script", default=False)
+(options, args) = parser.parse_args()
+if options.verbose:
+    verbose = True
+else:
+    verbose = False
+if options.station_override:
+    station = options.station_override
+else:
+    station = False
+if options.debug:
+    debug = options.debug
+else:
+    debug = False
+
+def main():
+    """Grab and parse
+    source data from IRIS
+    """
+    mean_noise_levels = 'http://crunch.iris.washington.edu/stationinfo/scripts/gks/MeanNoiseLevels'
+    base_prefix = 'http://crunch.iris.washington.edu/stationinfo/TA/rank/PDFMode/PDFMode-'
+    base_suffix = '_sec'
+    # Just need one period
+    # periods = ['1.037', '2.467', '30.443', '102.4']
+    periods = ['1.037']
+
+    if debug:
+        chans = ['BHE']
+    else:
+        chans = ['BHE', 'BHN', 'BHZ']
+
+    # Spoof a browser
+    user_agent = "Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10.6; en-US; rv:1.9.2.3) Gecko/20100401 Firefox/3.6.3"
+    accept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    accept_encoding = "gzip,deflate"
+    keep_alive = "115"
+    connection = "keep-alive"
+    headers = {
+        'User-Agent':user_agent,
+        'Accept':accept,
+        'Accept-Encoding':accept_encoding,
+        'Keep-Alive':keep_alive,
+        'Connection':connection
+    }
+    json_file = '/var/tmp/ranking.json'
+
+    print "Start of script at time %s" % strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
+
+    if verbose or debug:
+        print "- 1. Get the mean noise levels into dictionary from file %s" % mean_noise_levels
+    means_dict = {}
+    try:
+        mean_page = urllib2.Request(mean_noise_levels, None, headers)
+    except urllib2.URLError:
+        print urllib2.URLError
+    except:
+        print "    - Unknown urllib2 error for url '%s'" % mean_noise_levels
+    else:
+        opened_mean_page = urllib2.urlopen(mean_page)
+        means_file = opened_mean_page.readlines()
+        for line in means_file:
+            period, mean_bhe_bhn, mean_bhz = (line.rstrip()).split()
+            # print "Period: %s\tMean EN: %s\tMean Z: %s" % (period, mean_bhe_bhn, mean_bhz)
+            means_dict[period] = {'BHE_BHN': mean_bhe_bhn, 'BHZ': mean_bhz}
+        '''
+        Rearrange dictionary so it has per channel dict 
+        key that has a list of all values for it's value
+        '''
+        means_final_dict = {'BHE':[], 'BHN':[], 'BHZ':[]}
+        for k in sorted(means_dict.iterkeys()):
+            chan_values = means_dict[k]
+            for sub_k, sub_v in chan_values.iteritems():
+                if sub_k == 'BHE_BHN':
+                    means_final_dict['BHE'].append(sub_v)
+                    means_final_dict['BHN'].append(sub_v)
+                elif sub_k == 'BHZ':
+                    means_final_dict['BHZ'].append(sub_v)
+    if debug:
+        print means_dict
+        print means_final_dict
+
+    scale_url = '%s%s_mean_%s%s.html' % (base_prefix, chans[0], periods[0], base_suffix)
+    if verbose or debug:
+        print "- 2. Get color scale for one period and channel from file %s" % scale_url
+    scale_dict = {'caption':'', 'scale':[]}
+    try:
+        scale_page = urllib2.Request(scale_url, None, headers)
+    except urllib2.URLError:
+        print urllib2.URLError
+    except:
+        print "    - Unknown urllib2 error for url '%s'" % scale_url
+    else:
+        opened_scale_page = urllib2.urlopen(scale_page)
+        soup = BeautifulSoup(opened_scale_page)
+        scale_table = soup.find('table')
+        scale_dict['caption'] = scale_table.th.find('font').contents[0].__str__().strip()
+        for i in scale_table.findAll('td'):
+            '''
+            Format is currently: 
+            <td bgcolor="foo" align="BAR"> <font color="baz"> <font size="x">STRING THAT CONTAINS 'd'</font></font></td>
+            Note that this could change without notice
+            '''
+            bgcolor = i['bgcolor'].__str__().strip()
+            value = i.find(text=re.compile("d")).__str__().strip()
+            if debug:
+                print i
+                print "bgcolor: %s" % bgcolor
+                print "value: %s" % value
+            scale_dict['scale'].append({'bgcolor':bgcolor, 'value':value})
+    if debug:
+        print scale_dict
+
+    if verbose or debug:
+        print "- 3. Get data values for all channels for one period"
+    values_dict = {} # Holder
+    values_final_dict = {} # Calculated vals
+    incr = 1
+    for p in periods:
+        for c in chans:
+            values_dict[c] = {}
+            values_final_dict[c] = {}
+            if verbose or debug:
+                print " - 3.%d. Grab data for period %s and channel %s" % (incr, p, c)
+            incr += 1
+            full_url = '%s%s_%s%s' % (base_prefix, c, p, base_suffix)
+            try:
+                values_page = urllib2.Request(full_url, None, headers)
+            except urllib2.URLError:
+                print urllib2.URLError
+            except:
+                print "    - Unknown urllib2 error for url '%s'" % full_url
+            else:
+                opened_values_page = urllib2.urlopen(values_page)
+                values_file = opened_values_page.readlines()
+                values_keys = values_file.pop(0)
+                values_keys_list = values_keys.split()
+                del values_keys_list[0]
+                if debug:
+                    print values_keys_list
+                for line in values_file:
+                    per_sta_list = line.split()
+                    stacode = per_sta_list.pop(0)
+                    values_dict[c][stacode] = []
+                    values_final_dict[c][stacode] = []
+                    if len(per_sta_list) != len(means_final_dict[c]):
+                        print "Lists are not the same length - skipping chan '%s'" % c
+                    else:
+                        for i in range(len(per_sta_list)):
+                            # entry is of the form: -128/20 - need to rip out the /20 part
+                            entry_clean = per_sta_list[i].split('/')
+                            '''
+                            Determine the real value to insert
+                            which is entry_clean minus the period
+                            value from the means_final_dict
+                            Both lists should be the same length
+                            '''
+                            this_chan = means_final_dict[c]
+                            real_entry = "%3.2f" % (float(entry_clean[0]) - float(this_chan[i]))
+                            values_dict[c][stacode].append(entry_clean[0])
+                            values_final_dict[c][stacode].append(real_entry)
+                if debug:
+                    print values_dict
+                    print values_final_dict
+
+    if verbose or debug:
+        print "- 4. Save to json file '%s'" % json_file
+    f = open(json_file+'+', 'w')
+    if debug:
+        complete_dict = {'scale': scale_dict, 'means': means, 'means_final': means_final_dict, 'values': values_dict, 'values_final': values_final_dict}
+    else:
+        complete_dict = {'scale': scale_dict, 'means_final': means_final_dict, 'values_final': values_final_dict}
+    json.dump(complete_dict, f, sort_keys=True, indent=2)
+    f.flush()
+
+    try:
+        os.rename(json_file+'+', json_file)
+    except OSError:
+        print "  - Cannot rename JSON file '%s'. Permissions problem?" % json_file
+
+    print "End of script at time %s" % strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
+    return 0
+
+if __name__ == '__main__':
+    status = main()
+    sys.exit(status)
