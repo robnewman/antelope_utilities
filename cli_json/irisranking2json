@@ -11,6 +11,7 @@ from IRIS DMC tool and save as JSON
 @notes    IRIS creates the source files daily at 06:03. If this
           script is run via cron, it needs to take place after
           that time.
+          Need to ensure we get the station lat lons from the dbmaster
 '''
 
 # Import modules
@@ -23,6 +24,7 @@ from optparse import OptionParser
 import urllib2
 # Load datascope functions
 sys.path.append(os.environ['ANTELOPE'] + '/local/data/python/antelope')
+import datascope
 from stock import pfupdate, pfget, epoch2str, epoch, str2epoch, strtime, yearday
 
 try:
@@ -56,12 +58,14 @@ def main():
     """
     print "Start of script at time %s" % strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
     if debug:
+        dbmaster = '/anf/TA/rt/usarray/usarray'
         json_file = '/var/tmp/ranking.json'
     else:
         common_pf = 'common.pf'
         if verbose:
             print " - Parse configuration parameter file (%s)" % common_pf
         pfupdate(common_pf)
+        dbmaster = pfget(common_pf, 'USARRAY_DBMASTER')
         json_path = '%s/tools/' % pfget(common_pf, 'CACHEJSON')
         json_file = '%sstation_ranking/ranking.json' % json_path
 
@@ -232,12 +236,26 @@ def main():
                     print values_final_dict
 
     if verbose or debug:
-        print "- 4. Save to json file '%s'" % json_file
+        print "- 4. Get station locations from dbmaster '%s'" % dbmaster
+    sta_locations_dict = {}
+    dbptr = datascope.dbopen(dbmaster, 'r')
+    dbptr.lookup(table='snetsta')
+    dbptr.join('site')
+    dbptr.subset('snet =~ /TA/')
+    if verbose or debug:
+        print 'Number of records: %d' % dbptr.query('dbRECORD_COUNT')
+    for i in range(dbptr.query('dbRECORD_COUNT')):
+        dbptr[3] = i
+        sta, lat, lon = dbptr.getv('sta', 'lat', 'lon')
+        sta_locations_dict[sta] = [lat,lon]
+
+    if verbose or debug:
+        print "- 5. Save to json file '%s'" % json_file
     f = open(json_file+'+', 'w')
     if debug:
-        complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means': means_dict, 'means_final': means_final_dict, 'values': values_dict, 'values_final': values_final_dict}
+        complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means': means_dict, 'means_final': means_final_dict, 'values': values_dict, 'values_final': values_final_dict, 'stations': sta_locations_dict}
     else:
-        complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means_final': means_final_dict, 'values_final': values_final_dict}
+        complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means_final': means_final_dict, 'values_final': values_final_dict, 'stations': sta_locations_dict}
     json.dump(complete_dict, f, sort_keys=True, indent=2)
     f.flush()
 
