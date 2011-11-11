@@ -55,12 +55,15 @@ def main():
     source data from IRIS
     """
     print "Start of script at time %s" % strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
-    common_pf = 'common.pf'
-    if verbose:
-        print " - Parse configuration parameter file (%s)" % common_pf
-    pfupdate(common_pf)
-    json_path = '%s/tools/' % pfget(common_pf, 'CACHEJSON')
-    json_file = '%sstation_ranking/ranking.json' % json_path
+    if debug:
+        json_file = '/var/tmp/ranking.json'
+    else:
+        common_pf = 'common.pf'
+        if verbose:
+            print " - Parse configuration parameter file (%s)" % common_pf
+        pfupdate(common_pf)
+        json_path = '%s/tools/' % pfget(common_pf, 'CACHEJSON')
+        json_file = '%sstation_ranking/ranking.json' % json_path
 
     mean_noise_levels = 'http://crunch.iris.washington.edu/stationinfo/scripts/gks/MeanNoiseLevels'
     base_prefix = 'http://crunch.iris.washington.edu/stationinfo/TA/rank/PDFMode/PDFMode-'
@@ -88,9 +91,16 @@ def main():
         'Connection':connection
     }
 
+    # HTML codes for mathematical symbols
+    lte = '&#x2264'
+    gte = '&#x2265'
+    lt = '&lt;'
+    gt = '&gt;'
+
     if verbose or debug:
         print "- 1. Get the mean noise levels into dictionary from file %s" % mean_noise_levels
     means_dict = {}
+    time_periods = []
     try:
         mean_page = urllib2.Request(mean_noise_levels, None, headers)
     except urllib2.URLError:
@@ -102,7 +112,7 @@ def main():
         means_file = opened_mean_page.readlines()
         for line in means_file:
             period, mean_bhe_bhn, mean_bhz = (line.rstrip()).split()
-            # print "Period: %s\tMean EN: %s\tMean Z: %s" % (period, mean_bhe_bhn, mean_bhz)
+            time_periods.append(period)
             means_dict[period] = {'BHE_BHN': mean_bhe_bhn, 'BHZ': mean_bhz}
         '''
         Rearrange dictionary so it has per channel dict 
@@ -118,7 +128,11 @@ def main():
                 elif sub_k == 'BHZ':
                     means_final_dict['BHZ'].append(sub_v)
     if debug:
+        print "Periods:"
+        print time_periods
+        print "means_dict:"
         print means_dict
+        print "means_final_dict:"
         print means_final_dict
 
     scale_url = '%s%s_mean_%s%s.html' % (base_prefix, chans[0], periods[0], base_suffix)
@@ -144,11 +158,24 @@ def main():
             '''
             bgcolor = i['bgcolor'].__str__().strip()
             value = i.find(text=re.compile("d")).__str__().strip()
+            val_range = value.split()
+            if len(val_range) < 4:
+                if val_range[1] == gte:
+                    val_min = int(val_range[2])
+                    val_max = None
+                elif val_range[1] == lt:
+                    val_min = None
+                    val_max = int(val_range[2])
+            else:
+                val_min = int(val_range[0])
+                val_max = int(val_range[4])
+
             if debug:
                 print i
                 print "bgcolor: %s" % bgcolor
                 print "value: %s" % value
-            scale_dict['scale'].append({'bgcolor':bgcolor, 'value':value})
+                print "range: min: %s, max: %s" % (val_min, val_max)
+            scale_dict['scale'].append({'bgcolor': bgcolor, 'value': value, 'min': val_min, 'max': val_max})
     if debug:
         print scale_dict
 
@@ -208,9 +235,9 @@ def main():
         print "- 4. Save to json file '%s'" % json_file
     f = open(json_file+'+', 'w')
     if debug:
-        complete_dict = {'scale': scale_dict, 'means': means, 'means_final': means_final_dict, 'values': values_dict, 'values_final': values_final_dict}
+        complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means': means, 'means_final': means_final_dict, 'values': values_dict, 'values_final': values_final_dict}
     else:
-        complete_dict = {'scale': scale_dict, 'means_final': means_final_dict, 'values_final': values_final_dict}
+        complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means_final': means_final_dict, 'values_final': values_final_dict}
     json.dump(complete_dict, f, sort_keys=True, indent=2)
     f.flush()
 
