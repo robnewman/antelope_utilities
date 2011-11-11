@@ -187,6 +187,7 @@ def main():
         print "- 3. Get data values for all channels for one period"
     values_dict = {} # Holder
     values_final_dict = {} # Calculated vals
+    stacode_list = []
     incr = 1
     for p in periods:
         for c in chans:
@@ -213,6 +214,7 @@ def main():
                 for line in values_file:
                     per_sta_list = line.split()
                     stacode = per_sta_list.pop(0)
+                    stacode_list.append(stacode)
                     values_dict[c][stacode] = []
                     values_final_dict[c][stacode] = []
                     if len(per_sta_list) != len(means_final_dict[c]):
@@ -247,7 +249,8 @@ def main():
     for i in range(dbptr.query('dbRECORD_COUNT')):
         dbptr[3] = i
         sta, lat, lon = dbptr.getv('sta', 'lat', 'lon')
-        sta_locations_dict[sta] = [lat,lon]
+        if sta in stacode_list:
+            sta_locations_dict[sta] = [lat,lon]
 
     if verbose or debug:
         print "- 5. Save to json file '%s'" % json_file
