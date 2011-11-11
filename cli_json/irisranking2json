@@ -235,7 +235,7 @@ def main():
         print "- 4. Save to json file '%s'" % json_file
     f = open(json_file+'+', 'w')
     if debug:
-        complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means': means, 'means_final': means_final_dict, 'values': values_dict, 'values_final': values_final_dict}
+        complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means': means_dict, 'means_final': means_final_dict, 'values': values_dict, 'values_final': values_final_dict}
     else:
         complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means_final': means_final_dict, 'values_final': values_final_dict}
     json.dump(complete_dict, f, sort_keys=True, indent=2)
