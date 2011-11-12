@@ -75,11 +75,7 @@ def main():
     # Just need one period
     # periods = ['1.037', '2.467', '30.443', '102.4']
     periods = ['1.037']
-
-    if debug:
-        chans = ['BHE']
-    else:
-        chans = ['BHE', 'BHN', 'BHZ']
+    chans = ['BHE', 'BHN', 'BHZ']
 
     # Spoof a browser
     user_agent = "Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10.6; en-US; rv:1.9.2.3) Gecko/20100401 Firefox/3.6.3"
@@ -117,7 +113,7 @@ def main():
         for line in means_file:
             period, mean_bhe_bhn, mean_bhz = (line.rstrip()).split()
             time_periods.append(period)
-            means_dict[period] = {'BHE_BHN': mean_bhe_bhn, 'BHZ': mean_bhz}
+            means_dict[period] = {'BHE_BHN':mean_bhe_bhn,'BHZ':mean_bhz}
         '''
         Rearrange dictionary so it has per channel dict 
         key that has a list of all values for it's value
@@ -159,8 +155,17 @@ def main():
             Format is currently: 
             <td bgcolor="foo" align="BAR"> <font color="baz"> <font size="x">STRING THAT CONTAINS 'd'</font></font></td>
             Note that this could change without notice
+            !!! FIX: Currently IRIS has text strings instead of hexadecimal for 'red' and 'orange' only. No idea why.
+                     This may change in the future, so need a generic function to test for text string and convert
+                     to hexadecimal.
             '''
             bgcolor = i['bgcolor'].__str__().strip()
+            if bgcolor == 'orange':
+                bgcolor = '#FFA500'
+            elif bgcolor == 'red':
+                bgcolor = '#FF0000'
+            if bgcolor.find('#') == -1:
+                bgcolor = '#%s' % bgcolor
             value = i.find(text=re.compile("d")).__str__().strip()
             val_range = value.split()
             if len(val_range) < 4:
@@ -187,12 +192,14 @@ def main():
         print "- 3. Get data values for all channels for one period"
     values_dict = {} # Holder
     values_final_dict = {} # Calculated vals
+    values_final_hexa_dict = {} # Calculated vals
     stacode_list = []
     incr = 1
     for p in periods:
         for c in chans:
             values_dict[c] = {}
             values_final_dict[c] = {}
+            values_final_hexa_dict[c] = {}
             if verbose or debug:
                 print " - 3.%d. Grab data for period %s and channel %s" % (incr, p, c)
             incr += 1
@@ -217,6 +224,7 @@ def main():
                     stacode_list.append(stacode)
                     values_dict[c][stacode] = []
                     values_final_dict[c][stacode] = []
+                    values_final_hexa_dict[c][stacode] = []
                     if len(per_sta_list) != len(means_final_dict[c]):
                         print "Lists are not the same length - skipping chan '%s'" % c
                     else:
@@ -228,11 +236,50 @@ def main():
                             which is entry_clean minus the period
                             value from the means_final_dict
                             Both lists should be the same length
+
+                            Then convert to hexadecimal
                             '''
                             this_chan = means_final_dict[c]
-                            real_entry = "%3.2f" % (float(entry_clean[0]) - float(this_chan[i]))
+                            real_entry_float = float(entry_clean[0]) - float(this_chan[i])
+                            real_entry = "%3.2f" % real_entry_float
+
+                            # Dynamically choose the comparion to make and assign a color
+                            scales = scale_dict['scale']
+                            for i in range(len(scales)):
+                                if scales[i]['min'] == None:
+                                    if float('-inf') < real_entry_float < scales[i]['max']:
+                                        real_hexa = scales[i]['bgcolor']
+                                elif scales[i]['max'] == None:
+                                    if scales[i]['min'] <= real_entry_float < float('inf'):
+                                        real_hexa = scales[i]['bgcolor']
+                                else:
+                                    if scales[i]['min'] <= real_entry_float < scales[i]['max']:
+                                        real_hexa = scales[i]['bgcolor']
+                            '''
+                            # !!! FIX: Hard code comparison - will break if IRIS changes its categories
+                            if float('-inf') < real_entry_float < -35:
+                                real_hexa = '#0000FF'
+                            elif -35 <= real_entry_float < -25:
+                                real_hexa = '#3366FF'
+                            elif -25 <= real_entry_float < -15:
+                                real_hexa = '#66CCFF'
+                            elif -15 <= real_entry_float < -5:
+                                real_hexa = '#66FFCC'
+                            elif -5 <= real_entry_float < 5:
+                                real_hexa = '#CCFF66'
+                            elif 5 <= real_entry_float < 15:
+                                real_hexa = '#FFA500'
+                            elif 15 <= real_entry_float < 25:
+                                real_hexa = '#FF0000'
+                            elif 25 <= real_entry_float < 35:
+                                real_hexa = '#993366'
+                            elif 35 <= real_entry_float < float('inf'):
+                                real_hexa = '#660033'
+                            '''
+
                             values_dict[c][stacode].append(entry_clean[0])
                             values_final_dict[c][stacode].append(real_entry)
+                            values_final_hexa_dict[c][stacode].append(real_hexa)
                 if debug:
                     print values_dict
                     print values_final_dict
@@ -256,7 +303,8 @@ def main():
         print "- 5. Save to json file '%s'" % json_file
     f = open(json_file+'+', 'w')
     if debug:
-        complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means': means_dict, 'means_final': means_final_dict, 'values': values_dict, 'values_final': values_final_dict, 'stations': sta_locations_dict}
+        # complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means': means_dict, 'means_final': means_final_dict, 'values': values_dict, 'values_final': values_final_dict, 'values_final_hexa': values_final_hexa_dict, 'stations': sta_locations_dict}
+        complete_dict = {'periods': time_periods, 'scale': scale_dict, 'values_final_hexa': values_final_hexa_dict, 'stations': sta_locations_dict}
     else:
         complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means_final': means_final_dict, 'values_final': values_final_dict, 'stations': sta_locations_dict}
     json.dump(complete_dict, f, sort_keys=True, indent=2)
