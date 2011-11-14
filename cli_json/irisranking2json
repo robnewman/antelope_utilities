@@ -258,7 +258,6 @@ def main():
                             real_entry = "%3.2f" % real_entry_float
 
                             # Dynamically choose the comparion to make and assign a color
-                            '''
                             scales = scale_dict['scale']
                             for i in range(len(scales)):
                                 if scales[i]['min'] == None:
@@ -290,6 +289,7 @@ def main():
                                 real_hexa = '#993366'
                             elif 35 <= real_entry_float < float('inf'):
                                 real_hexa = '#660033'
+                            '''
 
                             if debug and stacode == '936A' and c == 'BHZ':
                                 print "Station:936A\tPeriod:%s\tChannel:%s\tRaw val:%s\tMean:%s\tReal entry: %s\tReal hexa: %s" % (this_period, c, entry_clean[0], means_dict[this_period]['BHZ'], real_entry, real_hexa)
@@ -329,8 +329,8 @@ def main():
         print "- 6. Save to json file '%s'" % json_file
     f = open(json_file+'+', 'w')
     if debug:
-        # complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means': means_dict, 'means_final': means_final_dict, 'values': values_dict, 'values_final': values_final_dict, 'values_final_hexa': values_final_hexa_dict, 'stations': sta_locations_dict, 'metadata': metadata_dict}
-        complete_dict = {'periods': time_periods, 'scale': scale_dict, 'values_final_hexa': values_final_hexa_dict, 'stations': sta_locations_dict, 'metadata': metadata_dict}
+        complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means': means_dict, 'means_final': means_final_dict, 'values': values_dict, 'values_final': values_final_dict, 'values_final_hexa': values_final_hexa_dict, 'stations': sta_locations_dict, 'metadata': metadata_dict}
+        # complete_dict = {'periods': time_periods, 'scale': scale_dict, 'values_final_hexa': values_final_hexa_dict, 'stations': sta_locations_dict, 'metadata': metadata_dict}
     else:
         complete_dict = {'periods': time_periods, 'scale': scale_dict, 'values_final_hexa': values_final_hexa_dict, 'stations': sta_locations_dict, 'metadata': metadata_dict}
     json.dump(complete_dict, f, sort_keys=True, indent=2)
