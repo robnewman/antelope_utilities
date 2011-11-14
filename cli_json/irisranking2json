@@ -117,9 +117,15 @@ def main():
         '''
         Rearrange dictionary so it has per channel dict 
         key that has a list of all values for it's value
+        !!! FIX: sorted !== natural sorting
+                 If you sort the dictionary keys that are currently numeric you will
+                 get a machine-sort, i.e. 1,2,5,10,100,200,250,1000,2000 will become
+                 1,10,100,1000,2,200,2000,250,5
         '''
         means_final_dict = {'BHE':[], 'BHN':[], 'BHZ':[]}
         for k in sorted(means_dict.iterkeys()):
+            # For debugging sorted 
+            #  print k
             chan_values = means_dict[k]
             for sub_k, sub_v in chan_values.iteritems():
                 if sub_k == 'BHE_BHN':
@@ -148,6 +154,9 @@ def main():
     else:
         opened_scale_page = urllib2.urlopen(scale_page)
         soup = BeautifulSoup(opened_scale_page)
+        # Put this into the metadata at the end
+        days = soup.findAll(text=re.compile("Noise levels"))[0]
+        iris_generation_time = soup.findAll(text=re.compile("was generated"))[0]
         scale_table = soup.find('table')
         scale_dict['caption'] = scale_table.th.find('font').contents[0].__str__().strip()
         for i in scale_table.findAll('td'):
@@ -239,11 +248,17 @@ def main():
 
                             Then convert to hexadecimal
                             '''
-                            this_chan = means_final_dict[c]
-                            real_entry_float = float(entry_clean[0]) - float(this_chan[i])
+                            this_period = time_periods[i]
+                            if c == 'BHZ':
+                                this_mean = means_dict[this_period]['BHZ']
+                            else:
+                                this_mean = means_dict[this_period]['BHE_BHN']
+
+                            real_entry_float = float(entry_clean[0]) - float(this_mean)
                             real_entry = "%3.2f" % real_entry_float
 
                             # Dynamically choose the comparion to make and assign a color
+                            '''
                             scales = scale_dict['scale']
                             for i in range(len(scales)):
                                 if scales[i]['min'] == None:
@@ -275,7 +290,9 @@ def main():
                                 real_hexa = '#993366'
                             elif 35 <= real_entry_float < float('inf'):
                                 real_hexa = '#660033'
-                            '''
+
+                            if debug and stacode == '936A' and c == 'BHZ':
+                                print "Station:936A\tPeriod:%s\tChannel:%s\tRaw val:%s\tMean:%s\tReal entry: %s\tReal hexa: %s" % (this_period, c, entry_clean[0], means_dict[this_period]['BHZ'], real_entry, real_hexa)
 
                             values_dict[c][stacode].append(entry_clean[0])
                             values_final_dict[c][stacode].append(real_entry)
@@ -300,13 +317,22 @@ def main():
             sta_locations_dict[sta] = [lat,lon]
 
     if verbose or debug:
-        print "- 5. Save to json file '%s'" % json_file
+        print "- 5. Write out helpful metadata"
+    metadata_dict = {}
+    metadata_dict['iris_days_string'] = days
+    metadata_dict['iris_generation_time'] = iris_generation_time
+    metadata_dict['last_modified'] = time()
+    metadata_dict['last_modified_readable'] = strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
+    metadata_dict['source'] = scale_url
+
+    if verbose or debug:
+        print "- 6. Save to json file '%s'" % json_file
     f = open(json_file+'+', 'w')
     if debug:
-        # complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means': means_dict, 'means_final': means_final_dict, 'values': values_dict, 'values_final': values_final_dict, 'values_final_hexa': values_final_hexa_dict, 'stations': sta_locations_dict}
-        complete_dict = {'periods': time_periods, 'scale': scale_dict, 'values_final_hexa': values_final_hexa_dict, 'stations': sta_locations_dict}
+        # complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means': means_dict, 'means_final': means_final_dict, 'values': values_dict, 'values_final': values_final_dict, 'values_final_hexa': values_final_hexa_dict, 'stations': sta_locations_dict, 'metadata': metadata_dict}
+        complete_dict = {'periods': time_periods, 'scale': scale_dict, 'values_final_hexa': values_final_hexa_dict, 'stations': sta_locations_dict, 'metadata': metadata_dict}
     else:
-        complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means_final': means_final_dict, 'values_final': values_final_dict, 'stations': sta_locations_dict}
+        complete_dict = {'periods': time_periods, 'scale': scale_dict, 'values_final_hexa': values_final_hexa_dict, 'stations': sta_locations_dict, 'metadata': metadata_dict}
     json.dump(complete_dict, f, sort_keys=True, indent=2)
     f.flush()
 
