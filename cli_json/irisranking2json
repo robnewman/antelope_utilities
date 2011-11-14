@@ -121,7 +121,6 @@ def main():
                  If you sort the dictionary keys that are currently numeric you will
                  get a machine-sort, i.e. 1,2,5,10,100,200,250,1000,2000 will become
                  1,10,100,1000,2,200,2000,250,5
-        '''
         means_final_dict = {'BHE':[], 'BHN':[], 'BHZ':[]}
         for k in sorted(means_dict.iterkeys()):
             # For debugging sorted 
@@ -133,13 +132,15 @@ def main():
                     means_final_dict['BHN'].append(sub_v)
                 elif sub_k == 'BHZ':
                     means_final_dict['BHZ'].append(sub_v)
+        '''
+
     if debug:
         print "Periods:"
         print time_periods
         print "means_dict:"
         print means_dict
-        print "means_final_dict:"
-        print means_final_dict
+        # print "means_final_dict:"
+        # print means_final_dict
 
     scale_url = '%s%s_mean_%s%s.html' % (base_prefix, chans[0], periods[0], base_suffix)
     if verbose or debug:
@@ -234,7 +235,7 @@ def main():
                     values_dict[c][stacode] = []
                     values_final_dict[c][stacode] = []
                     values_final_hexa_dict[c][stacode] = []
-                    if len(per_sta_list) != len(means_final_dict[c]):
+                    if len(per_sta_list) != len(means_dict):
                         print "Lists are not the same length - skipping chan '%s'" % c
                     else:
                         for i in range(len(per_sta_list)):
@@ -243,7 +244,7 @@ def main():
                             '''
                             Determine the real value to insert
                             which is entry_clean minus the period
-                            value from the means_final_dict
+                            value from the means_dict
                             Both lists should be the same length
 
                             Then convert to hexadecimal
@@ -269,27 +270,6 @@ def main():
                                 else:
                                     if scales[i]['min'] <= real_entry_float < scales[i]['max']:
                                         real_hexa = scales[i]['bgcolor']
-                            '''
-                            # !!! FIX: Hard code comparison - will break if IRIS changes its categories
-                            if float('-inf') < real_entry_float < -35:
-                                real_hexa = '#0000FF'
-                            elif -35 <= real_entry_float < -25:
-                                real_hexa = '#3366FF'
-                            elif -25 <= real_entry_float < -15:
-                                real_hexa = '#66CCFF'
-                            elif -15 <= real_entry_float < -5:
-                                real_hexa = '#66FFCC'
-                            elif -5 <= real_entry_float < 5:
-                                real_hexa = '#CCFF66'
-                            elif 5 <= real_entry_float < 15:
-                                real_hexa = '#FFA500'
-                            elif 15 <= real_entry_float < 25:
-                                real_hexa = '#FF0000'
-                            elif 25 <= real_entry_float < 35:
-                                real_hexa = '#993366'
-                            elif 35 <= real_entry_float < float('inf'):
-                                real_hexa = '#660033'
-                            '''
 
                             if debug and stacode == '936A' and c == 'BHZ':
                                 print "Station:936A\tPeriod:%s\tChannel:%s\tRaw val:%s\tMean:%s\tReal entry: %s\tReal hexa: %s" % (this_period, c, entry_clean[0], means_dict[this_period]['BHZ'], real_entry, real_hexa)
@@ -329,8 +309,7 @@ def main():
         print "- 6. Save to json file '%s'" % json_file
     f = open(json_file+'+', 'w')
     if debug:
-        complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means': means_dict, 'means_final': means_final_dict, 'values': values_dict, 'values_final': values_final_dict, 'values_final_hexa': values_final_hexa_dict, 'stations': sta_locations_dict, 'metadata': metadata_dict}
-        # complete_dict = {'periods': time_periods, 'scale': scale_dict, 'values_final_hexa': values_final_hexa_dict, 'stations': sta_locations_dict, 'metadata': metadata_dict}
+        complete_dict = {'periods': time_periods, 'scale': scale_dict, 'means': means_dict, 'values': values_dict, 'values_final': values_final_dict, 'values_final_hexa': values_final_hexa_dict, 'stations': sta_locations_dict, 'metadata': metadata_dict}
     else:
         complete_dict = {'periods': time_periods, 'scale': scale_dict, 'values_final_hexa': values_final_hexa_dict, 'stations': sta_locations_dict, 'metadata': metadata_dict}
     json.dump(complete_dict, f, sort_keys=True, indent=2)
