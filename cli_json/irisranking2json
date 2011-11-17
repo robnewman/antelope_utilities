@@ -116,11 +116,20 @@ def soup_metadata(url, headers, html_codes, verbosity=0):
             for i in scale_table.findAll('td'):
                 '''
                 Format is currently: 
-                <td bgcolor="foo" align="BAR"> <font color="baz"> <font size="x">STRING THAT CONTAINS 'd'</font></font></td>
+                <td bgcolor="foo" align="BAR">
+                    <font color="baz">
+                        <font size="x">
+                            STRING THAT CONTAINS 'd'
+                        </font>
+                    </font>
+                </td>
                 Note that this could change without notice
-                !!! FIX: Currently IRIS has text strings instead of hexadecimal for 'red' and 'orange' only. No idea why.
-                         This may change in the future, so need a generic function to test for text string and convert
-                         to hexadecimal.
+                !!! FIX: Currently IRIS has text strings instead 
+                         of hexadecimal for 'red' and 'orange' 
+                         only. No idea why. This may change in 
+                         the future, so need a generic function 
+                         to test for text string and convert to 
+                         hexadecimal.
                 '''
                 bgcolor = i['bgcolor'].__str__().strip()
                 if bgcolor == 'orange':
@@ -146,7 +155,12 @@ def soup_metadata(url, headers, html_codes, verbosity=0):
                     print "bgcolor: %s" % bgcolor
                     print "value: %s" % value
                     print "range: min: %s, max: %s" % (val_min, val_max)
-                scale_dict['scale'].append({'bgcolor': bgcolor, 'value': value, 'min': val_min, 'max': val_max})
+                scale_dict['scale'].append({
+                    'bgcolor': bgcolor, 
+                    'value': value, 
+                    'min': val_min, 
+                    'max': val_max}
+                )
     if verbosity == 2:
         print scale_dict
     return scale_dict, metadata
@@ -214,14 +228,14 @@ def grab_data(url_pre, url_suffix, headers, periods,
                         print "Lists are not the same length - skipping chan '%s'" % c
                     else:
                         for i in range(len(per_sta_list)):
-                            # entry is of the form: -128/20 - need to rip out the /20 part
-                            entry_clean = per_sta_list[i].split('/')
                             '''
                             Determine the real value to insert
                             which is entry_clean minus the period
                             value from the means_dict
                             Both lists should be the same length
+                            Entry is of the form: -128/20 - need to rip out the /20 part
                             '''
+                            entry_clean = per_sta_list[i].split('/')
                             this_period = time_periods[i]
                             if c == 'BHZ':
                                 this_mean = means_dict[this_period]['BHZ']
@@ -231,7 +245,15 @@ def grab_data(url_pre, url_suffix, headers, periods,
                             real_entry = "%3.2f" % real_entry_float
                             real_hexa = calc_hexa(real_entry_float, scale_dict['scale'])
                             if verbosity > 0 and stacode == '936A' and c == 'BHZ':
-                                print "Station:936A\tPeriod:%s\tChannel:%s\tRaw val:%s\tMean:%s\tReal entry: %s\tReal hexa: %s" % (this_period, c, entry_clean[0], means_dict[this_period]['BHZ'], real_entry, real_hexa)
+                                lng_str = []
+                                lng_str.append("Station:936A\t")
+                                lng_str.append("Period:%s\t" % this_period)
+                                lng_str.append("Channel:%s\t" % c)
+                                lng_str.append("Raw val:%s\t" % entry_clean[0])
+                                lng_str.append("Mean:%s\t" % means_dict[this_period]['BHZ'])
+                                lng_str.append("Real entry: %s\t" % real_entry)
+                                lng_str.append("Real hexa: %s" % real_hexa)
+                                print ''.join(lng_str)
                             values_dict[c][stacode].append(entry_clean[0])
                             values_final_dict[c][stacode].append(real_entry)
                             values_final_hexa_dict[c][stacode].append(real_hexa)
@@ -316,21 +338,9 @@ def write_to_json(json_file, time_periods, scale_dict, means_dict,
 
 def main():
     """Grab and parse
-    source data from IRIS
+    source data from 
+    IRIS webpage
     """
-
-    if debug:
-        dbmaster = '/anf/TA/rt/usarray/usarray'
-        json_file = '/var/tmp/ranking.json'
-    else:
-        common_pf = 'common.pf'
-        if verbose:
-            print " - Parse configuration parameter file (%s)" % common_pf
-        pfupdate(common_pf)
-        dbmaster = pfget(common_pf, 'USARRAY_DBMASTER')
-        json_path = '%s/tools/' % pfget(common_pf, 'CACHEJSON')
-        json_file = '%sstation_ranking/ranking.json' % json_path
-
     mean_noise_levels = 'http://crunch.iris.washington.edu/stationinfo/scripts/gks/MeanNoiseLevels'
     base_prefix = 'http://crunch.iris.washington.edu/stationinfo/TA/rank/PDFMode/PDFMode-'
     base_suffix = '_sec'
@@ -338,7 +348,6 @@ def main():
     # periods = ['1.037', '2.467', '30.443', '102.4']
     periods = ['1.037']
     chans = ['BHE', 'BHN', 'BHZ']
-
     # Spoof a browser
     user_agent = "Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10.6; en-US; rv:1.9.2.3) Gecko/20100401 Firefox/3.6.3"
     accept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
@@ -352,7 +361,6 @@ def main():
         'Keep-Alive':keep_alive,
         'Connection':connection
     }
-
     # HTML codes for mathematical symbols
     html_codes = {
         'lte': '&#x2264',
@@ -362,16 +370,25 @@ def main():
     }
 
     print "Start of script at time %s" % strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
-
     verbosity = determine_verbosity(verbose, debug)
+    if verbosity == 2:
+        dbmaster = '/anf/TA/rt/usarray/usarray'
+        json_file = '/var/tmp/ranking.json'
+    else:
+        common_pf = 'common.pf'
+        if verbosity > 0:
+            print " - Parse configuration parameter file (%s)" % common_pf
+        pfupdate(common_pf)
+        dbmaster = pfget(common_pf, 'USARRAY_DBMASTER')
+        json_path = '%s/tools/' % pfget(common_pf, 'CACHEJSON')
+        json_file = '%sstation_ranking/ranking.json' % json_path
     means, time_periods = grab_means_and_periods(mean_noise_levels, headers, verbosity)
     scale_url = '%s%s_mean_%s%s.html' % (base_prefix, chans[0], periods[0], base_suffix)
     scale, iris_metadata = soup_metadata(scale_url, headers, html_codes, verbosity)
-    vals, vals_final, hexa_dict, stacodes = grab_data(base_prefix, base_suffix, headers, periods, chans, scale, time_periods, means, verbosity)
+    vals, vals_final, hexa, stacodes = grab_data(base_prefix, base_suffix, headers, periods, chans, scale, time_periods, means, verbosity)
     sta_locs = datascope_station_retrieval(dbmaster, stacodes, verbosity)
     metadata = write_out_metadata(iris_metadata, scale_url, verbosity)
-    write_to_json(json_file, time_periods, scale, means, vals, vals_final, hexa_dict, sta_locs, metadata, verbosity)
-
+    write_to_json(json_file, time_periods, scale, means, vals, vals_final, hexa, sta_locs, metadata, verbosity)
     print "End of script at time %s" % strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
 
     return 0
