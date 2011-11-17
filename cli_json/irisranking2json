@@ -6,7 +6,7 @@ from IRIS DMC tool and save as JSON
 
 @author   Rob Newman <robertlnewman@gmail.com> 858.822.1333
 @version  1.0
-@modified 2011-11-10
+@modified 2011-11-17
 @license  MIT-style license
 @notes    IRIS creates the source files daily at 06:03. If this
           script is run via cron, it needs to take place after
@@ -48,7 +48,7 @@ else:
     debug = False
 
 def determine_verbosity(verbose=False, debug=False):
-    """Determin the
+    """Determine the
     verbosity of the 
     script"""
     verbosity = 0
@@ -71,7 +71,7 @@ def grab_means_and_periods(url, headers, verbosity=0):
     except urllib2.URLError:
         print urllib2.URLError
     except:
-        print "    - Unknown urllib2 error for url '%s'" % url
+        print "- Unknown urllib2 error for url '%s'" % url
     else:
         opened_mean_page = urllib2.urlopen(mean_page)
         means_file = opened_mean_page.readlines()
@@ -97,7 +97,7 @@ def soup_metadata(url, headers, html_codes, verbosity=0):
     try:
         from BeautifulSoup import BeautifulSoup
     except ImportError:
-        print "Import Error: Do you have BeautifulSoup installed correctly?"
+        print "- Import Error: Do you have BeautifulSoup installed correctly?"
         exit()
     else:
         try:
@@ -105,7 +105,7 @@ def soup_metadata(url, headers, html_codes, verbosity=0):
         except urllib2.URLError:
             print urllib2.URLError
         except:
-            print "    - Unknown urllib2 error for url '%s'" % scale_url
+            print "- Unknown urllib2 error for url '%s'" % scale_url
         else:
             opened_scale_page = urllib2.urlopen(scale_page)
             soup = BeautifulSoup(opened_scale_page)
