@@ -848,31 +848,6 @@ class NetworkSummary:
         datascope.dbfree(db_active)
         return active_dict
         # }}}
-#
-#    def instrument_history(self, sta, intype='summary'):
-#        """Return dictionary of instrument history
-#        Have to use BHN or BNE (not BHZ) for sensor history
-#        as sensor resets are typically E-W or N-S
-#        This is a little more complex than the usual grouped
-#        records, so cannot use utility function process_grouped_records()
-#        """
-#        inst_list = []
-#        inst_hist = datascope.dbsubset(self.instrument_history_dbptr, 'sta =~ /%s/' % sta)
-#        inst_hist.sort('ondate')
-#        for i in range(inst_hist.query('dbRECORD_COUNT')):
-#            inst_hist[3] = i
-#            snet, sta, chan, time, ssident, dlmodel, snmodel, snident, ondate, offdate, hang, vang, descrip = inst_hist.getv('snet', 'sta', 'chan', 'time', 'ssident', 'dlmodel', 'snmodel', 'snident', 'ondate', 'offdate', 'hang', 'vang', 'descrip' )
-#            this_sensor = self.sensor_readable(snmodel)
-#            this_datalogger = self.datalogger_readable(dlmodel)
-#            datalogger_idtag = self.idtag_determiner(ssident)
-#            sensor = {'model':this_sensor[0], 'css':this_sensor[1], 'ssident':snident}
-#            datalogger = { 'model':this_datalogger[0], 'css':this_datalogger[1], 'ssident':ssident, 'idtag':datalogger_idtag}
-#            inst_list.append({'channel':chan, 'hang':hang, 'vang':vang, 'sensor':sensor, 'datalogger':datalogger, 'ondate':ondate, 'offdate':offdate})
-#        datascope.dbfree(inst_hist)
-#        if intype == 'summary':
-#            return inst_list.pop()
-#        elif intype == 'detail':
-#            return inst_list
 
     def baler_history(self):
         """Retrieve and return baler history 
