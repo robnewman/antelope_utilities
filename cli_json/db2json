@@ -1,21 +1,34 @@
 #!/usr/bin/env python
 
 """
-Antelope Datascope output to JSON files. 
-Summary & individual created via cron once a day
+Antelope Datascope output to JSON files
+Summary & individual stations
 
 @package  Datascope
 @author   Rob Newman <robertlnewman@gmail.com> 858.822.1333
-@version  2.0
+@version  2.2
 @license  MIT style license
-@modified 2011-07-18
-@notes    1. Rewrite to only have dbpointers open for a short while - Datascope 
-          does not like realtime dbs being open when edits can happen (dbpointers
-          all become invalid and the script crashes)
-          2. Datascope does not correctly free up memory. Triage this by forcing
-          memory cleanup with datascope.dbfree() and datascope.dbclose(). This goes
-          against Pythonic Principles (Python has dynamic garbage collection) but
-          until underlying Datascope memory leaks are fixed, this is a stop-gap.
+@modified 2012-03-05
+@notes    1. Rewrite to only have dbpointers open for a short
+          while - Datascope does not like realtime dbs being
+          open when edits can happen (dbpointers all become
+          invalid and the script crashes)
+          2. Datascope does not correctly free up memory. Triage
+          this by forcing memory cleanup with datascope.dbfree()
+          and datascope.dbclose(). This goes against Pythonic
+          Principles (Python has dynamic garbage collection) but
+          until underlying Datascope memory leaks are fixed, this
+          is a stop-gap.
+          3. Polaris, Canada (snet PO) stations only have HH.*
+          channels. This means some additional exceptions code to
+          account for this (we don't want to include BK or CI
+          stations that use HH.* channels)
+          4. Create and use a parameter file (db2json.pf) that has
+          the specific network and channel subsets to account for
+          (3) above (look for 'override_subset' in code).
+          5. Account for stations that have more than one sensor
+          installed, such as an STS-2 (broadband) and Episensor
+          (strong-motion).
 """
 
 import sys
@@ -29,111 +42,250 @@ import gzip
 sys.path.append(os.environ['ANTELOPE'] + '/local/data/python/antelope')
 import datascope
 import orb
-from stock import pfupdate, pfget, epoch2str, epoch, str2epoch, strtime, yearday
+from stock import pfupdate, pffiles, pfget, epoch2str, epoch, str2epoch, strtime, yearday
 from optparse import OptionParser
 from time import time, gmtime, strftime
+from pprint import pprint
 
-subtype_list = ['all', 'decom', 'adopt', 'active']
-station_dict = { 'decom':{}, 'adopt':{},'active':{} }
+subtype_list = ['all']
+station_dict = {'decom':{}, 'adopt':{}, 'active':{}}
+for k in station_dict.iterkeys():
+    subtype_list.append(k)
 core_fields = ["snet", "vnet", "lat", "lon", "staname", "time"]
-active_fields = core_fields + ["commtype", "provider", "insname", "elev", "equip_install", "cert_time"]
-decom_fields = core_fields + ["decert_time", "insname", "endtime", "cert_time"]
-adopt_fields = core_fields + ["decert_time", "newsnet", "newsta", "atype", "auth"]
+active_fields = core_fields + [
+    "commtype",
+    "provider",
+    "insname",
+    "elev",
+    "equip_install",
+    "cert_time"
+]
+decom_fields = core_fields + [
+    "decert_time",
+    "insname",
+    "endtime",
+    "cert_time"
+]
+adopt_fields = core_fields + [
+    "decert_time",
+    "newsnet",
+    "newsta",
+    "atype",
+    "auth"
+]
 # For station detail pages (individual station JSON files)
-detail_dbmaster_fields = core_fields + ["sta", "ondate", "offdate", "elev", "endtime", "equip_install", "equip_remove", "cert_time", "decert_time", "commtype", "provider", "power", "dutycycle", "insname"]
-detail_dbmaster_adopt_fields  = adopt_fields + ["sta", "ondate", "offdate", "elev", "endtime", "equip_install", "equip_remove", "cert_time", "commtype", "provider", "power", "dutycycle", "insname"]
-detail_inst_hist_fields = ["insname", "instype", "ssident", "chan", "hang", "vang", "sitechan.ondate", "sitechan.offdate", "gtype", "idtag"]
-detail_deployment_hist_fields = ["time", "endtime", "vnet", "cert_time", "decert_time"]
-detail_comms_hist_fields = ["time", "endtime", "commtype", "provider", "power", "dutycycle"]
-detail_baler_fields = ["model", "firm", "nreboot", "last_reboot", "ssident"]
+detail_dbmaster_fields = core_fields + [
+    "sta",
+    "ondate",
+    "offdate",
+    "elev",
+    "endtime",
+    "equip_install",
+    "equip_remove",
+    "cert_time",
+    "decert_time",
+    "commtype",
+    "provider",
+    "power",
+    "dutycycle",
+    "insname"
+]
+detail_dbmaster_adopt_fields  = adopt_fields + [
+    "sta",
+    "ondate",
+    "offdate",
+    "elev",
+    "endtime",
+    "equip_install",
+    "equip_remove",
+    "cert_time",
+    "commtype",
+    "provider",
+    "power",
+    "dutycycle",
+    "insname"
+]
+detail_inst_hist_fields = [
+    "insname",
+    "instype",
+    "ssident",
+    "chan",
+    "hang",
+    "vang",
+    "sitechan.ondate",
+    "sitechan.offdate",
+    "gtype",
+    "idtag"
+]
+detail_deployment_hist_fields = [
+    "time",
+    "endtime",
+    "vnet",
+    "cert_time",
+    "decert_time"
+]
+detail_comms_hist_fields = [
+    "time",
+    "endtime",
+    "commtype",
+    "provider",
+    "power",
+    "dutycycle"
+]
+detail_baler_fields = [
+    "model",
+    "firm",
+    "nreboot",
+    "last_reboot",
+    "ssident"
+]
 detail_dlevents = ["dlevtype", "dlcomment"]
 
-usage = "Usage: %prog [options]"
-parser = OptionParser(usage=usage)
-parser.add_option("-v", action="store_true", dest="verbose", help="verbose output", default=False)
-parser.add_option("-x", action="store_true", dest="debug", help="debug output", default=False)
-parser.add_option("-t", "--type", action="store", type="string", dest="subtype", help="type of station to process", default=False)
-parser.add_option("-z", action="store_true", dest="zipper", help="create a gzipped version of the file", default=False)
-(options, args) = parser.parse_args()
-if options.verbose:
-    verbose = True
-else:
-    verbose = False
-if options.debug:
-    debug = True
-else:
-    debug = False
-if options.zipper:
-    zipper = True
-else:
-    zipper = False
-if options.subtype:
-    subtype = options.subtype
-    if subtype not in subtype_list:
-        spacer = ', '
-        print "- Subtype %s not recognized. Please do not define it or use either: %s" % (subtype, spacer.join(subtype_list))
-        exit()
-else:
-    subtype = False
+def configure():
+    """Parse command 
+    line args
+    """
+    # {{{ configure
+    usage = "Usage: %prog [options]"
+    parser = OptionParser(usage=usage)
+    parser.add_option("-v", action="store_true", dest="verbose",
+        help="verbose output", default=False)
+    parser.add_option("-x", action="store_true", dest="debug",
+        help="debug output", default=False)
+    parser.add_option("-t", "--type", action="store", type="string",
+        dest="subtype", help="type of station to process", default=False)
+    parser.add_option("-z", action="store_true", dest="zipper",
+        help="create a gzipped version of the file", default=False)
+    parser.add_option("-p", "--pf", action="store", dest="pf", type="string",
+        help="parameter file path")
+    (options, args) = parser.parse_args()
+    if options.verbose:
+        verbose = True
+    else:
+        verbose = False
+    if options.debug:
+        debug = True
+    else:
+        debug = False
+    if options.zipper:
+        zipper = True
+    else:
+        zipper = False
+    if options.subtype:
+        subtype = options.subtype
+        if subtype not in subtype_list:
+            logfmt("Subtype '%s' not recognized" % subtype)
+            logfmt("\tEither don't define it or use: %s" % ', '.join(subtype_list))
+            sys.exit(-1)
+    else:
+        subtype = False
+    if not options.pf:
+        pfs_tuple = list(pffiles('db2json'))
+        for p in pfs_tuple:
+            if os.path.isfile(p):
+                pfname = p
+    else:
+        if not os.path.isfile(options.pf):
+            logfmt("Command line defined parameter file '%s' does not exist." % options.pf)
+            sys.exit(-1)
+        else:
+            pfname = options.pf
+    return verbose, debug, zipper, subtype, pfname
+    # }}}
 
 def nfs_test(db):
     """Test that the disk
     mount point is visible
     """
+    # {{{ nfs_test
     if not os.path.isfile(db):
-        print " - Error: Cannot read the dbmaster file (%s). NFS problems? Permissions problems? Check the file exists..." % db
-        exit()
+        logfmt("Error: Cannot read the dbmaster file (%s)" % db)
+        logfmt("NFS or permissions problems? Check file exists...")
+        sys.exit(-1)
     return True
+    # }}}
 
 def zip_me_up(myfile):
     """Create a gzipped 
     JSON file
     """
+    # {{{ zip_me_up
     fzip_in = open(myfile, 'rb')
     try:
         fzip_out = gzip.open('%s.gz' % myfile, 'wb' )
     except IOError,e:
-        print "Error: %s:%s" % (IOError, e)
+        logfmt("Error: %s - %s" % (IOError, e))
     else:
         fzip_out.writelines(fzip_in)
         fzip_out.close()
         fzip_in.close()
         return True
+    # }}}
+
+def logfmt(message):
+    """Output a log
+    message with a
+    timestamp"""
+    # {{{ logfmt
+    curtime = strtime(time())
+    print curtime, message
+    # }}}
+
+def print_select_statement(statement):
+    """Output a log
+    message for the 
+    orb select statement
+    """
+    # {{{ print_select_statement
+    logfmt("Orbselect statement parts (split on '|'):")
+    parts = statement.strip('()').split('|')
+    for p in parts:
+        print "\t%s" % p
+    # }}}
 
 class ParseOrb:
     """Methods for grabbing the
     useful packet values out
     of the specified orb
     """
-    def __init__(self, alerts):
+    # {{{ ParseOrb
+
+    def __init__(self, alerts, verbose=False, debug=False):
         """Default args"""
+        # {{{ __init__
         self.alerts = alerts
+        self.verbose = verbose
+        self.debug = debug
+        # }}}
 
     def orb_interaction(self, orbptr, selection_string=False):
         """Open & select orb
         """
-        if verbose:
-            print " - Orb (%s) operations" % orbptr
+        # {{{ orb_interaction
+        if self.verbose or self.debug:
+            logfmt("Orb (%s) operations" % orbptr)
         try:
             myorb = orb.Orb(orbptr, 'r')
         except Exception, e:
-            print "  - Cannot open the orb %s. Caught exception: (%s)" % (orbptr, e)
-            return False
+            logfmt("\tException: %s" % e)
+            sys.exit(-1)
         else:
             if myorb.select(selection_string) < 1:
-                print "  - Problem with the orb select functionality!"
+                logfmt("\tProblem with the orb select functionality!")
             else:
-                if verbose:
-                    print "  - Number of sources selected: %d" % myorb.select(selection_string)
+                if self.verbose:
+                    logfmt("\tNumber of sources selected: %d" % myorb.select(selection_string))
                 when, sources = myorb.sources()
                 orb_dict = self.parse_orb_sources(sources)
             myorb.close()
         return orb_dict
+        # }}}
 
     def parse_orb_sources(self, sources):
         """Parse the sources
         and return a dictionary
         """
+        # {{{ parse_orb_sources
         source_dict = {}
         for s in sources:
             srcname = s['srcname']
@@ -152,21 +304,25 @@ class ParseOrb:
             source_dict[sta]['soldest_time'] = epoch2str(s['soldest_time'], "%Y-%m-%d %H:%M:%S")
             source_dict[sta]['slatest_time'] = epoch2str(s['slatest_time'], "%Y-%m-%d %H:%M:%S")
         return source_dict
+        # }}}
 
     def orbstat_alert_level(self, secs):
         """Determine the alert level
         """
+        # {{{ orbstat_alert_level
         if secs >= int(self.alerts['offline']):
             return 'down', 0
         elif secs >= int(self.alerts['warning']):
             return 'warning', 1
         else:
             return 'ok', 1
+        # }}}
 
     def humanize_time(self, secs):
         """Create human readable
         timestamp
         """
+        # {{{ humanize_time
         secs = round(secs)
         if secs < 60:
             return '%02ds' % (secs)
@@ -177,11 +333,13 @@ class ParseOrb:
             else:
                 hours,mins = divmod(mins,60)
                 return '%02dh:%02dm:%02ds' % (hours, mins, secs)
+        # }}}
 
     def add_orbstat(self, orbstat, sta, qtype=False):
         """Return station specific 
         orbstat values
         """
+        # {{{ add_orbstat
         orbstat_dict = {}
         if sta in orbstat:
             orbstat_dict['latency'] = orbstat[sta]['latency']
@@ -196,41 +354,81 @@ class ParseOrb:
             orbstat_dict['alert'] = 'down'
             orbstat_dict['status'] = 0
         return orbstat_dict
- 
+        # }}}
+
+    # }}}
+
 class NetworkSummary:
     """Methods for determining
     values of network and stations
     for JSON file(s)
     """
+    # {{{ NetworkSummary
+
     def __init__(self, dbptr, pf, verbose=False, debug=False):
         """Initialize database pointers
         """
+        # {{{ __init__
         self.dbptr = dbptr
         self.pf = pf
         self.verbose = verbose
         self.debug = debug
+        # }}}
 
     def open_db(self):
-        """Test that the database pointer
-        is valid
+        """Test that the database
+        pointer is valid
         """
+        # {{{ open_db
         try:
             db = datascope.dbopen(self.dbptr, 'r')
         except Exception,e:
-            print "  - Cannot open database '%s'. Caught exception %s" % (self.dbptr, e)
-            exit()
+            logfmt("Cannot open database '%s'. Caught exception %s" % (self.dbptr, e))
+            sys.exit(-1)
         else:
             self.db = db
+        # }}}
 
     def close_db(self):
         """Close the open database 
         pointer. This will free() all
         dbpointers in memory
         """
+        # {{{ close_db
         if self.db:
             db = self.db
             db.close()
+        # }}}
 
+    def table_test(self, tables_to_check, json_file):
+        """Test modification time 
+        for database tables to see 
+        if we need to run script"""
+        # {{{ table_test
+        if self.verbose:
+            logfmt("Test for modification time of tables:")
+        table_modification_times = []
+        for table in tables_to_check:
+            table_ptr = datascope.dblookup(self.db, '', table, '', '')
+            table_stats = os.stat(table_ptr.query('dbTABLE_FILENAME'))
+            table_age = table_stats.st_mtime
+            if self.verbose:
+                logfmt("\tFile modification time of '%s' table: %s" % (table, epoch2str(table_age, "%Y-%m-%d %H:%M:%S")))
+            table_modification_times.append(table_age)
+        try:
+            json_stats = os.stat(json_file)
+        except OSError, e:
+            logfmt("\tOSError: %s. Recreate!" % e)
+            return True
+        else:
+            if self.verbose:
+                logfmt("\tFile modification time of '%s': %s" % (json_file, epoch2str(json_stats.st_mtime, "%Y-%m-%d %H:%M:%S")))
+            if max(table_modification_times) > json_stats.st_mtime:
+                return True
+            else:
+                return False
+        # }}}
+ 
     def idtag_determiner(self, dlogger_id):
         """The idtag field is only
         in dlsite, staq330 and q330comm
@@ -238,6 +436,7 @@ class NetworkSummary:
         q330comm first used 2006.
         Try q330comm first.
         """
+        # {{{ idtag_determiner
         dbptr = datascope.dblookup(self.db, '', 'q330comm', '', '')
         dbptr.sort('ssident', unique=True)
         dbptr.subset('ssident=~/%s/' % dlogger_id)
@@ -248,40 +447,96 @@ class NetworkSummary:
             idtag = 'N/A'
         dbptr.free()
         return idtag
+        # }}}
 
-    def create_instrument_history(self):
+    def create_instrument_history(self, override_subset=False):
         """Open the snetsta table then
         join on stage, dlsensor and sitechan
         using very specific join keys (including
         time ranges). Then get histories for 
         all stations, returning dictionary
+
+        Gets complicated for stations with more
+        than one station installed, such as sites
+        with broadband seismometer and strong
+        motion sensor, or TOLK which has two
+        sensors installed
         """
+        # {{{ create_instrument_history
         if self.verbose:
-            print " - Working on create_instrument_history for all stations"
+            logfmt("create_instrument_history(): Work on all stations, using override_subset if defined")
 
         # Get whole dlsensor table into simple per snident_dlident keyed list
         dlsensor_history = {}
         dlsensor_hist_dbptr = datascope.dblookup(self.dbptr, '', 'dlsensor', '', '') 
         for i in range(dlsensor_hist_dbptr.query('dbRECORD_COUNT')):
-            dlsensor_hist_dbptr[3] = i 
-            dlsen_dlmodel, dlsen_dlident, dlsen_chident, dlsen_time, dlsen_endtime, dlsen_snmodel, dlsen_snident = dlsensor_hist_dbptr.getv('dlmodel', 'dlident', 'chident', 'time', 'endtime', 'snmodel', 'snident')
+            dlsensor_hist_dbptr[3] = i
+            dlsen_dlmodel,
+            dlsen_dlident,
+            dlsen_chident,
+            dlsen_time,
+            dlsen_endtime,
+            dlsen_snmodel,
+            dlsen_snident = dlsensor_hist_dbptr.getv(
+                'dlmodel',
+                'dlident',
+                'chident',
+                'time',
+                'endtime',
+                'snmodel',
+                'snident'
+            )
             new_key = dlsen_snident + ' ' + dlsen_dlident
-            dlsensor_history[new_key] = {'dlmodel':dlsen_dlmodel, 'dlident':dlsen_dlident, 'chident':dlsen_chident, 'time':dlsen_time, 'endtime':dlsen_endtime, 'snmodel':dlsen_snmodel, 'snident':dlsen_snident}
+            dlsensor_history[new_key] = {
+                'dlmodel':dlsen_dlmodel,
+                'dlident':dlsen_dlident,
+                'chident':dlsen_chident,
+                'time':dlsen_time,
+                'endtime':dlsen_endtime,
+                'snmodel':dlsen_snmodel,
+                'snident':dlsen_snident
+            }
         # Get whole sitechan table into simple per station list
         instrument_history = {}
         sitechan_hist_dbptr = datascope.dblookup(self.dbptr, '', 'sitechan', '', '') 
-        sitechan_hist_dbptr.subset('chan=~/^(BH|HN).*/')
+        sitechan_hist_dbptr.join('snetsta')
+
+        if override_subset:
+            logfmt('create_instrument_history(): Override_subset(s) provided')
+            for o in override_subset:
+                if self.verbose or self.debug:
+                    logfmt("\t'%s'" % o)
+                try:
+                    sitechan_hist_dbptr.subset(o)
+                except Exception, e:
+                    logfmt("\tError with subset (%s) encountered: %s" % (o, e))
+
         sitechan_hist_dbptr.sort(('sta', 'ondate', 'chan'))
+
+        # We need to be able to handle multiple sensors here
+
         sitechan_hist_grp_dbptr = datascope.dbgroup(sitechan_hist_dbptr, 'sta')
         for i in range(sitechan_hist_grp_dbptr.query('dbRECORD_COUNT')):
             sitechan_hist_grp_dbptr[3] = i 
             sta, [db, view, end_rec, start_rec] = sitechan_hist_grp_dbptr.getv('sta', 'bundle')
             if self.verbose:
-                print " - create_instrument_history(): Processing station %s" % sta
+                logfmt("\tcreate_instrument_history(): Processing station %s" % sta)
             instrument_history[sta] = []
             for j in range(start_rec, end_rec):
                 sitechan_hist_dbptr[3] = j 
-                site_chan, site_ondate, site_offdate, site_descrip, site_hang, site_vang = sitechan_hist_dbptr.getv('chan', 'ondate', 'offdate', 'descrip', 'hang', 'vang')
+                site_chan,
+                site_ondate,
+                site_offdate,
+                site_descrip,
+                site_hang,
+                site_vang = sitechan_hist_dbptr.getv(
+                    'chan',
+                    'ondate',
+                    'offdate',
+                    'descrip',
+                    'hang',
+                    'vang'
+                )
                 if site_descrip != '' and len(site_descrip) > 1:
                     site_sensorid, site_dloggerid = site_descrip.split()
                     if site_descrip in dlsensor_history:
@@ -301,7 +556,6 @@ class NetworkSummary:
                             'ssident':dlsensor_history[site_descrip]['dlident'],
                             'idtag':datalogger_idtag
                         }
-
                         instrument_history[sta].append({
                             'channel':site_chan,
                             'ondate':site_ondate,
@@ -345,15 +599,36 @@ class NetworkSummary:
         sitechan_hist_grp_dbptr.free()
         sitechan_hist_dbptr.free()
         return instrument_history
+        # }}}
 
-    def create_deploy_pointer(self):
+    def create_deploy_pointer(self, override_subset=False):
         """Create a pointer to the
         simple joined view of deployment
+        Add ability to define an override
+        subset to just get certain stations 
+        of interest
         """
+        # {{{ create_deploy_pointer
         dbptr = datascope.dblookup(self.db, '', 'site', '', '')
         dbptr.join('snetsta')
         dbptr.join('deployment', outer=True)
+        dbptr.join('sitechan', outer=True)
+        dbptr.join('comm', outer=True)
+        dbptr.join('sensor', outer=True)
+        dbptr.join('instrument', outer=True)
+        if override_subset:
+            logfmt('create_deploy_pointer(): Override_subset(s) provided')
+            for o in override_subset:
+                if self.verbose or self.debug:
+                    logfmt("\t'%s'" % o)
+                try:
+                    dbptr.subset(o)
+                except Error, e:
+                    logfmt("\tError with subset (%s) encountered: %s" % (o, e))
+        if self.debug or self.verbose:
+            logfmt('Number of records: %d' % dbptr.query('dbRECORD_COUNT'))
         self.deploy_dbptr = dbptr
+        # }}}
 
     def get_metadata(self):
         """Get all the meta data values for
@@ -361,8 +636,9 @@ class NetworkSummary:
         including dbNULL, dbFIELD_DETAIL,
         dbFIELD_DESCRIPTION, dbFIELD_TYPE
         """
+        # {{{ get_metadata
         if self.verbose:
-            print " - Determining all null values, detail, descriptions and field types for schema"
+            logfmt("Determining all null values, detail, descriptions and field types for schema")
         self.dbmeta = {}
         dbmeta = self.db
         for table in dbmeta.query('dbSCHEMA_TABLES'):
@@ -386,15 +662,17 @@ class NetworkSummary:
                             self.dbmeta[field]['description'] = dbmeta.query('dbFIELD_DESCRIPTION')
                             self.dbmeta[field]['field_type'] = dbmeta.query('dbFIELD_TYPE')
         datascope.dbfree(dbmeta)
-        if debug:
-            print "Metadata dictionary:\n"
-            print self.dbmeta
+        if self.debug:
+            logfmt("Metadata dictionary:")
+            logfmt(self.dbmeta)
         return self.dbmeta
+        # }}}
 
     def field_definitions(self, dbptr, field):
         """Define what each field key 
         should be and what it should return
         """
+        # {{{ field_definitions
         field_object = {}
         if field in self.dbmeta:
             detail = self.dbmeta[field]['detail']
@@ -426,7 +704,7 @@ class NetworkSummary:
                 field_format = value.lower()
                 field_format = field_format.replace(' ','_' )
                 if field_format not in self.pf['comms']:
-                    print "Comm type %s not in pf_comms_list list! Dbmaster error or new unaccounted for comm type!" % field_format
+                    logfmt("Comm type %s not in pf_comms_list list! Dbmaster error or new unaccounted for comm type!" % field_format)
                     field_object['readable'] = 'unknown'
                     field_object['css'] = 'unknown'
                 else:
@@ -439,27 +717,29 @@ class NetworkSummary:
                 field_format = field_format.replace('/','_' )
                 field_format = field_format.strip("'")
                 if field_format not in self.pf['provider']:
-                    print "Provider type %s not in pf_provider_list list! Dbmaster error or new unaccounted for provider type!" % field_format
+                    logfmt("Provider type %s not in pf_provider_list list! Dbmaster error or new unaccounted for provider type!" % field_format)
                     field_object['readable'] = 'unknown'
                     field_object['css'] = 'unknown'
                 else:
                     pf_field_readable = self.pf['provider'][field_format]['name']
                     field_object['readable'] = pf_field_readable
                     field_object['css'] = field_format
-        if debug:
+        if self.debug:
             field_object['field'] = field
             field_object['detail'] = detail
             field_object['description'] = description
             field_object['type'] = field_type
             field_object['null'] = null
         field_object['value'] = value
-        if debug:
-            print field_object
+        if self.debug:
+            logfmt(field_object)
         return field_object
+        # }}}
 
     def process_decom_stations(self, field_list):
         """Process just decommissioned stations
         """
+        # {{{ process_decom_stations
         if field_list == 'detail':
             fields = detail_dbmaster_fields
         elif field_list == 'summary':
@@ -467,14 +747,11 @@ class NetworkSummary:
         decom_dict = {}
         db_decom = datascope.dbsubset(self.deploy_dbptr, 'offdate != NULL || offdate < now()')
         db_decom.subset('endtime < now()')
-        db_decom.join('comm')
-        db_decom.join('sensor')
-        db_decom.join('instrument')
         db_decom.join('adoption', pattern1=('sta'), outer=True)
         db_decom.subset('atype == NULL')
         db_decom.sort(['snet','sta'], unique=True)
-        if verbose:
-            print "  - Work through %d decommissioned stations" % db_decom.query('dbRECORD_COUNT')
+        if self.verbose:
+            logfmt("process_decom_stations(): Work through %d decommissioned stations" % db_decom.query('dbRECORD_COUNT'))
         for i in range(db_decom.query('dbRECORD_COUNT')):
             db_decom[3] = i
             sta = db_decom.getv('sta')[0]
@@ -490,10 +767,12 @@ class NetworkSummary:
                     decom_dict[sta][df] = df_obj[df_readable_field]
         datascope.dbfree(db_decom)
         return decom_dict
+        # }}}
 
     def process_adopted_stations(self, field_list):
         """Process just adopted stations
         """
+        # {{{ process_adopted_stations
         if field_list == 'detail':
             fields = detail_dbmaster_adopt_fields
         elif field_list == 'summary':
@@ -501,16 +780,13 @@ class NetworkSummary:
         adopt_dict = {}
         db_adopt = datascope.dbsubset(self.deploy_dbptr, 'offdate != NULL || offdate < now()')
         db_adopt.subset('endtime < now()')
-        db_adopt.join('comm')
-        db_adopt.join('sensor')
-        db_adopt.join('instrument')
         db_adopt.sort(['snet', 'sta'])
         db_adopt.join('adoption', pattern1=('sta'), outer=True)
         db_adopt.subset('atype != NULL')
         db_adopt.sort(['snet', 'sta'])
         db_adopt.group('sta')
-        if verbose:
-            print "  - Work through %d adopted stations" % db_adopt.query('dbRECORD_COUNT')
+        if self.verbose:
+            logfmt("process_adopted_stations(): Work through %d adopted stations" % db_adopt.query('dbRECORD_COUNT'))
         for i in range(db_adopt.query('dbRECORD_COUNT')):
             db_adopt[3] = i
             sta = db_adopt.getv('sta')[0]
@@ -531,11 +807,13 @@ class NetworkSummary:
                     adopt_dict[sta][adf] = adf_obj[adf_readable_field]
         datascope.dbfree(db_adopt)
         return adopt_dict
+        # }}}
 
     def process_active_stations(self, field_list):
         """Process currently active
         stations
         """
+        # {{{ process_active_stations
         if field_list == 'detail':
             fields = detail_dbmaster_fields
         elif field_list == 'summary':
@@ -545,17 +823,15 @@ class NetworkSummary:
         db_active.subset('offdate == NULL || offdate >= now()')
         db_active.subset('endtime >= now()')
         db_active.subset('time <= now()')
-        db_active.join('comm', outer=True)
         db_active.subset('comm.endtime == NULL || comm.endtime >= now()')
-        db_active.join('sensor', outer=True)
-        db_active.join('instrument', outer=True)
         db_active.subset('sensor.endtime == NULL || sensor.endtime >= now()')
         db_active.subset('insname != NULL')
-        db_active.subset('chan =~ /BHZ.*/') # Include loc_codes
-        db_active.subset('samprate >= 40')
+        # Include loc_codes and account for PO stations that we only collect HH.* chans
+        # db_active.subset('chan =~ /BHZ.*/ || (snet =~ /PO/ && chan =~ /HHZ.*/)')
+        # db_active.subset('samprate >= 40')
         db_active.sort(("sta"), unique=True)
-        if verbose:
-            print "  - Work through %d active stations" % db_active.query('dbRECORD_COUNT')
+        if self.verbose:
+            logfmt("process_active_stations(): Work through %d active stations" % db_active.query('dbRECORD_COUNT'))
         for i in range(db_active.query('dbRECORD_COUNT')):
             db_active[3] = i
             sta = db_active.getv('sta')[0]
@@ -571,6 +847,7 @@ class NetworkSummary:
                     active_dict[sta][af] = af_obj[af_readable_field]
         datascope.dbfree(db_active)
         return active_dict
+        # }}}
 #
 #    def instrument_history(self, sta, intype='summary'):
 #        """Return dictionary of instrument history
@@ -601,21 +878,24 @@ class NetworkSummary:
         """Retrieve and return baler history 
         depending on query type
         """
+        # {{{ baler_history
         if self.verbose:
-            print " - Working on baler_history for all stations"
+            logfmt("baler_history(): Working on all stations")
         baler_dict = {}
         stabaler_ptr = datascope.dblookup(self.db, '', 'stabaler', '', '')
         stabaler_ptr.sort(('dlsta','time'))
         try:
             baler_dict = self.process_grouped_records(stabaler_ptr, 'dlsta', detail_baler_fields)
         except LookupError,e:
-            print 'baler_history(): LookupError: %s' % (e)
+            logfmt('baler_history(): LookupError: %s' % (e))
         stabaler_ptr.free()
         return baler_dict
+        # }}}
 
     def process_grouped_records(self, dbpt, dict_key, my_fields):
         """Process groups of records
         """
+        # {{{ process_grouped_records
         my_dict = {}
         my_group = datascope.dbgroup(dbpt, dict_key)
         if my_group.query('dbRECORD_COUNT') > 0:
@@ -638,6 +918,7 @@ class NetworkSummary:
             return my_dict
         else:
             raise LookupError('No groupable records for this station')
+        # }}}
 
     def infrasound_sensors(self, imap):
         """Determine what infrasound sensors are installed for both
@@ -648,18 +929,19 @@ class NetworkSummary:
         This is a little more complex than the usual grouped
         records, so cannot use utility function process_grouped_records()
         """
+        # {{{ infrasound_sensors
         qstr = '|'.join([ '|'.join(v) for k,v in imap.iteritems()]) # Build the Datascope query str
         if self.verbose:
-            print "  - infrasound_sensors(): Searching sitechan table for chans that match: %s" % qstr
+            logfmt("\tinfrasound_sensors(): Searching sitechan table for chans that match: %s" % qstr)
         infrasound_history = {}
         infra_hist_dbptr = datascope.dblookup(self.db, '', 'sitechan', '', '')
         try:
             infra_hist_dbptr.subset('chan=~/(%s)/' % qstr)
         except Exception,e:
-            print "  - infrasound_sensors(): Error: subset on sitechan table failed with exception: %s" % e
+            logfmt("\tinfrasound_sensors(): Error: subset on sitechan table failed with exception: %s" % e)
         else:
-            if debug:
-                print "  - infrasound_sensors(): There are %d records" % infra_hist_dbptr.query('dbRECORD_COUNT')
+            if self.debug:
+                logfmt("  - infrasound_sensors(): There are %d records" % infra_hist_dbptr.query('dbRECORD_COUNT'))
             infra_hist_dbptr.sort(('sta', 'ondate', 'chan'))
             infra_hist_grp_dbptr = datascope.dbgroup(infra_hist_dbptr, 'sta')
             for i in range(infra_hist_grp_dbptr.query('dbRECORD_COUNT')):
@@ -667,7 +949,7 @@ class NetworkSummary:
                 sta, [db, view, end_rec, start_rec] = infra_hist_grp_dbptr.getv('sta', 'bundle')
                 # Generate all keys for the dictionary
                 if self.verbose:
-                    print "  - infrasound_sensors(): Processing station %s" % sta
+                    logfmt("\tinfrasound_sensors(): Processing station %s" % sta)
                 infrasound_history[sta] = {'current':[], 'history':{}}
                 infrachans_history_holder = []
                 # Process all records per station
@@ -682,7 +964,7 @@ class NetworkSummary:
                             infra_sensor = sentype
                     my_sub_dict['sensor'] = infra_sensor
                     if self.verbose and (sta == '442A' or sta == '214A' or sta == 'MDND'):
-                        print infrasound_history[sta]['current']
+                        logfmt(infrasound_history[sta]['current'])
                     if offdate == self.dbmeta['offdate']['null']:
                         offdate = 'N/A'
                         if not infra_sensor in infrasound_history[sta]['current']:
@@ -704,15 +986,18 @@ class NetworkSummary:
             infra_hist_grp_dbptr.free()
             infra_hist_dbptr.free()
             return infrasound_history
+            # }}}
 
     def deployment_history(self):
         """Return the deployment
         history as a dictionary
         """
+        # {{{ deployment_history
         if self.verbose:
-            print "  - Working on deployment_history for all stations"
+            logfmt("deployment_history(): Working on all stations")
         deploy_hist_dict = {}
-        deploy_ptr = datascope.dbsort(self.deploy_dbptr, ('sta', 'time'))
+        # This ensures only one entry per time period
+        deploy_ptr = datascope.dbsort(self.deploy_dbptr, ('sta', 'time'), unique=True)
         deploy_grp_ptr = datascope.dbgroup(deploy_ptr, 'sta')
         for i in range(deploy_grp_ptr.query('dbRECORD_COUNT')):
             deploy_grp_ptr[3] = i
@@ -731,13 +1016,15 @@ class NetworkSummary:
         deploy_grp_ptr.free()
         deploy_ptr.free()
         return deploy_hist_dict
+        # }}}
 
     def comms_history(self):
         """Return the communications
         history as a dictionary
         """
+        # {{{ comms_history
         if self.verbose:
-            print "  - Working on comms_history for all stations"
+            logfmt("comms_history(): Working on all stations")
         comms_dict = {}
         comms_ptr = datascope.dblookup(self.db, '', 'comm', '', '')
         comms_ptr.sort(('sta','time'))
@@ -746,8 +1033,8 @@ class NetworkSummary:
             comms_grp_ptr[3] = i
             sta, [db, view, end_rec, start_rec] = comms_grp_ptr.getv('sta', 'bundle')
             comms_dict[sta] = []
-            per_sta_comms_dict = {}
             for j in range(start_rec, end_rec):
+                per_sta_comms_dict = {}
                 comms_ptr[3] = j
                 for dchf in detail_comms_hist_fields:
                     dchf_obj = self.field_definitions(comms_ptr, dchf)
@@ -762,26 +1049,28 @@ class NetworkSummary:
         comms_grp_ptr.free()
         comms_ptr.free()
         return comms_dict
+        # }}}
 
     def calibration_history(self, dbpath):
         """Return calibration history
         This is a little more complex than the usual grouped
         records, so cannot use utility function process_grouped_records()
         """
+        # {{{ calibration_history
         if self.verbose:
-            print " - Working on calibration_history for all stations"
+            logfmt("calibration_history(): Working on all stations")
         calibration_dict = {}
         calib_ptr = datascope.dbopen(dbpath, 'r')
         calib_ptr.lookup(table='calplot')
         calib_ptr.sort(('sta', 'time'))
         calib_grp_ptr = datascope.dbgroup(calib_ptr, 'sta')
         if self.debug:
-            print "  - calibration_history(): There are %d grouped records" % calib_grp_ptr.query('dbRECORD_COUNT')
+            logfmt("\tcalibration_history(): There are %d grouped records" % calib_grp_ptr.query('dbRECORD_COUNT'))
         for i in range(calib_grp_ptr.query('dbRECORD_COUNT')):
             calib_grp_ptr[3] = i
             sta, [db, view, end_rec, start_rec] = calib_grp_ptr.getv('sta', 'bundle')
             if self.debug:
-                print "   - calibration_history(): Processing station %s" % sta
+                logfmt("\tcalibration_history(): Processing station %s" % sta)
             calibration_dict[sta] = []
             # Temporaray holder dictionary
             calib_holder = {}
@@ -798,14 +1087,16 @@ class NetworkSummary:
         calib_grp_ptr.free()
         calib_ptr.close()
         return calibration_dict
+        # }}}
 
     def dlevents_history(self, dbpath):
         """Return all datalogger
         events for all stations
         as a dictionary
         """
+        # {{{ dlevents_history
         if self.verbose:
-            print " - Working on dlevent_history for all stations"
+            logfmt("dlevents_history(): Working on all stations")
         dlevents_dict = {}
         dlevs_ptr = datascope.dbopen(dbpath, 'r')
         dlevs_ptr.lookup(table='dlevent')
@@ -833,12 +1124,14 @@ class NetworkSummary:
         dlevs_grp_ptr.free()
         dlevs_ptr.close()
         return dlevents_dict
+        # }}}
 
     def sensor_readable(self, insname):
         """Use pf values to determine sensor values
         Force match to be a string in case of just int
         values in the regex
         """
+        # {{{ sensor_readable
         smodel = False
         sclass = False
         l_insname = insname.lower()
@@ -848,17 +1141,19 @@ class NetworkSummary:
                     smodel = self.pf['sensors'][k]['name']
                     sclass = k
         if not smodel:
-            print "sensor_readable(): Error: instrument %s is not one of the options!" % insname
+            logfmt("sensor_readable(): Error: instrument %s is not one of the options!" % insname)
             smodel = 'unknown'
         if not sclass:
             sclass = 'unknown'
         return smodel, sclass
+        # }}}
 
     def datalogger_readable(self, insname):
         """Use pf values to determine datalogger values
         Force match to be a string in case of just int
         values in the regex
         """
+        # {{{ datalogger_readable
         dmodel = False
         dclass = False
         l_insname = insname.lower()
@@ -868,23 +1163,85 @@ class NetworkSummary:
                     dmodel = self.pf['dataloggers'][k]['name']
                     dclass = k
         if not dmodel:
-            print "datalogger_readable(): Error: instrument %s is not one of the options!" % insname
+            logfmt("datalogger_readable(): Error: instrument %s is not one of the options!" % insname)
             dmodel = 'unknown'
         if not dclass:
             dclass = 'unknown'
         return dmodel, dclass
+        # }}}
+
+    def summary_instrument_history(self, sta_ins_hist):
+        """Parse and return the 
+        summary instrument
+        history. There should always
+        be at least one vertical (Z)
+        channel. This will return
+        something like the following:
+        { 'datalogger': [
+            [
+                {'css': 'q330', 'idtag': '1532', 'model': 'Quanterra Q330', 'ssident': '0100000B69C47486'}
+            ]
+        ],
+        'sensor': [
+            [    
+                {'css': 'cmg', 'model': 'Guralp CMG-3T', 'ssident': 'T3K70'}
+            ]
+        ] }
+        """
+        # {{{ summary_instrument_history
+        summary_grp = {'datalogger':[], 'sensor':[]}
+        # Temporary holding dicts
+        datalogger_hist = {}
+        sensor_hist = {}
+
+        for i in range(len(sta_ins_hist)):
+            if 'Z' in sta_ins_hist[i]['channel']:
+                ondate = sta_ins_hist[i]['ondate']
+                if ondate == -1:
+                    # Set to some date in the future 
+                    # that won't be part of ops
+                    ondate = 2050001
+                # ondate = str(ondate)
+                # Need to capture multiple sensors
+                if not ondate in datalogger_hist:
+                    datalogger_hist[ondate] = []
+                datalogger_hist[ondate].append(sta_ins_hist[i]['datalogger'])
+                if not ondate in sensor_hist:
+                    sensor_hist[ondate] = []
+                sensor_hist[ondate].append(sta_ins_hist[i]['sensor'])
+
+        # Now loop over dicts and return a (ordered) list
+        for key in sorted(datalogger_hist.iterkeys()):
+            summary_grp['datalogger'].append(datalogger_hist[key])
+        for key in sorted(sensor_hist.iterkeys()):
+            summary_grp['sensor'].append(sensor_hist[key])
+
+        if self.debug:
+            pprint(summary_grp)
+
+        if len(summary_grp['datalogger']) == 0:
+            return False
+        else:
+            return summary_grp
+        # }}}
+ 
+    # }}} NetworkSummary
 
 def main():
     """Main processing script
     for all JSON summary & individual
     files
     """
-    print "Start of script at time %s" % strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
+    verbose, debug, zipper, subtype, db2jsonpf = configure()
+
     if debug:
-        print " - DEBUGGING ON!"
-    if verbose:
-        print " - Parse stations.pf"
+        logfmt("*** DEBUGGING MODE")
+
     stations_pf = 'stations.pf'
+
+    if verbose or debug:
+        logfmt("Parse stations configuration parameter file (%s)" % stations_pf)
+
     pfupdate(stations_pf)
     stapf = {}
     stapf['network'] = pfget(stations_pf, 'network')
@@ -892,218 +1249,309 @@ def main():
     stapf['comms'] = pfget(stations_pf, 'comms_type')
     stapf['dataloggers'] = pfget(stations_pf, 'datalogger')
     stapf['sensors'] = pfget(stations_pf, 'sensor')
+
     common_pf = 'common.pf'
-    if verbose:
-        print " - Parse configuration parameter file (%s)" % common_pf
+
+    if verbose or debug:
+        logfmt("Parse configuration parameter file (%s)" % common_pf)
+
     pfupdate(common_pf)
     json_path = '%s/stations' % pfget(common_pf, 'CACHEJSON')
-    all_stations_json_file = '%s/stations_beta.json' % json_path
+    all_stations_json_file = '%s/stations.json' % json_path
     dbmaster = pfget(common_pf, 'USARRAY_DBMASTER')
+    tables_to_check = pfget(common_pf, 'USARRAY_CHECK_TABLES')
     q330comms = pfget(common_pf, 'USARRAY_Q330COMMS')
-    usarray_orb = pfget(common_pf, 'USARRAY_ORB')
-    usarray_orb_stations_select  = pfget(common_pf, 'USARRAY_ORB_STATIONS_SELECT')
+    orb = pfget(common_pf, 'USARRAY_ORB')
+    orb_stations_select  = pfget(common_pf, 'USARRAY_ORB_STATIONS_SELECT')
     cascadia_orb = pfget(common_pf, 'CASCADIA_ORB')
     cascadia_orb_stations_select = pfget(common_pf, 'CASCADIA_ORB_STATIONS_SELECT')
     orbstat_alerts = pfget(common_pf, 'ORBSTAT_ALERTS')
     infrasound_mapping = pfget(common_pf, 'INFRASOUND_MAPPING')
-    if verbose:
-        print "  - Infrasound mapping:"
-        print infrasound_mapping
+    if verbose or debug:
+        logfmt("Infrasound mapping:")
+        print "\t", infrasound_mapping
     calibrations = pfget(common_pf, 'DBCALIB')
     dbops_q330 = pfget(common_pf, 'DBOPS_Q330')
     landowner_dir = "%s_local" % pfget(common_pf, 'CACHE_REPORTS_LANDOWNER')
     station_digest_dir = "%s_local" % pfget(common_pf, 'CACHE_REPORTS_STATION_DIGEST')
-    if verbose:
-        print "  - USArray dbmaster path is %s\n  - USArray orb path is %s\n  - USArray orbselect statement is %s" % (dbmaster, usarray_orb, usarray_orb_stations_select)
+
+    override_subset = False
+    if pfget(db2jsonpf, 'override_subset'):
+        override_subset = pfget(db2jsonpf, 'override_subset')
+
+    if verbose or debug:
+        logfmt("Dbmaster path '%s'" % dbmaster)
+        logfmt("Orb path '%s'" % orb)
+        print_select_statement(orb_stations_select)
 
     nfs_test(dbmaster)
 
-    myorb = ParseOrb(orbstat_alerts)
-    orbstatus = {} 
-    orbstatus.update(myorb.orb_interaction(usarray_orb, usarray_orb_stations_select))
+    myorb = ParseOrb(orbstat_alerts, verbose, debug)
+    orbstatus = {}
+    orbstatus.update(myorb.orb_interaction(orb, orb_stations_select))
     orbstatus.update(myorb.orb_interaction(cascadia_orb, cascadia_orb_stations_select))
 
-    if verbose:
-        db = NetworkSummary(dbmaster, stapf, verbose=True)
-    else:
-        db = NetworkSummary(dbmaster, stapf)
+    db = NetworkSummary(dbmaster, stapf, verbose, debug)
 
-    print "- Summary JSON file processing"
     db.open_db()
-    db.get_metadata()
-    # metadata = db.get_metadata()
-    db.create_deploy_pointer()
-    station_dict['decom'] = db.process_decom_stations('summary')
-    station_dict['adopt'] = db.process_adopted_stations('summary')
-    station_dict['active'] = db.process_active_stations('summary')
-    instrument_history = db.create_instrument_history()
-    baler_history = db.baler_history()
-    infrasound_history = db.infrasound_sensors(infrasound_mapping)
 
-    print " - Decom stations: Add most recent instrument & baler history"
-    for sta in sorted(station_dict['decom'].iterkeys()):
-        dlsta = '%s_%s' % (station_dict['decom'][sta]['snet'], sta)
-        if verbose:
-            print "  - Processing decom station: %s" % sta
-        if station_dict['decom'][sta]['snet'] == 'TA':
-            try:
-                recent_inst_hist = instrument_history[sta][-1]
-            except LookupError,e:
-                print "instrument_history(): LookupError: %s" % e
-            else:
-                station_dict['decom'][sta]['sensor'] = {}
-                station_dict['decom'][sta]['datalogger'] = {}
-                station_dict['decom'][sta]['sensor']['value'] = recent_inst_hist['sensor']['model']
-                station_dict['decom'][sta]['sensor']['css'] = recent_inst_hist['sensor']['css']
-                station_dict['decom'][sta]['datalogger']['value'] = recent_inst_hist['datalogger']['model']
-                station_dict['decom'][sta]['datalogger']['css'] = recent_inst_hist['datalogger']['css']
-            if dlsta in baler_history:
-                station_dict['decom'][sta]['baler'] = baler_history[dlsta][-1]
-            # Need this for most recent sensor in top right
-            if sta in infrasound_history:
-                if 'current' in infrasound_history[sta]:
-                    station_dict['decom'][sta]['infrasound'] = infrasound_history[sta]['current']
+    if not db.table_test(tables_to_check, all_stations_json_file):
+        db.close_db()
+        if verbose or debug:
+             logfmt("**** Database tables not updated since JSON files last created. Aborting.")
+    else:
+
+        logfmt("Summary JSON file processing")
+        db.get_metadata()
+
+        db.create_deploy_pointer(override_subset)
+        station_dict['decom'] = db.process_decom_stations('summary')
+        station_dict['adopt'] = db.process_adopted_stations('summary')
+        station_dict['active'] = db.process_active_stations('summary')
+        instrument_history = db.create_instrument_history(override_subset)
+        baler_history = db.baler_history()
+        infrasound_history = db.infrasound_sensors(infrasound_mapping)
+
+        logfmt("Decom stations: Add most recent instrument & baler history")
+        for sta in sorted(station_dict['decom'].iterkeys()):
+            dlsta = '%s_%s' % (station_dict['decom'][sta]['snet'], sta)
+            if verbose or debug:
+                logfmt("\tProcessing decom station: %s" % sta)
+            if station_dict['decom'][sta]['snet'] == 'TA':
+
+                try:
+                    # recent_inst_hist = instrument_history[sta][-1]
+                    summary_instrument = db.summary_instrument_history(instrument_history[sta])
+                except LookupError,e:
+                    logfmt("\tinstrument_history(): LookupError: %s" % e)
+                    logfmt("\tAttempt to use the 'insname' field...")
+
+                    try:
+                        sensor_model, sensor_class = db.sensor_readable(station_dict['decom'][sta]['insname'])
+                    except Exception,e:
+                        logfmt("\tError in sensor_readable() test: %s" % e)
+                    else:
+                        station_dict['decom'][sta]['sensor'] = {'value':sensor_model, 'css':sensor_class}
+
+                    try:
+                        datalogger_model, datalogger_class = db.datalogger_readable(station_dict['decom'][sta]['insname'])
+                    except Exception,e:
+                        logfmt("\tError in datalogger_readable() test: %s" % e)
+                    else:
+                        station_dict['decom'][sta]['datalogger'] = {'value':datalogger_model, 'css':datalogger_class}
+
                 else:
-                    station_dict['decom'][sta]['infrasound'] = infrasound_history[sta]['history'][-1]
-            else:
-                station_dict['decom'][sta]['infrasound'] = 'unknown'
+                    # More than one sensor allowed. Only one datalogger allowed
+                    station_dict['decom'][sta]['sensor'] = []
+                    station_dict['decom'][sta]['datalogger'] = {}
+                    for i in range(len(summary_instrument['sensor'][-1])):
+                        station_dict['decom'][sta]['sensor'].append({
+                            'value':summary_instrument['sensor'][-1][i]['model'], 
+                            'css':summary_instrument['sensor'][-1][i]['css'],
+                            'ssident':summary_instrument['sensor'][-1][i]['ssident']
+                        })
 
+                    station_dict['decom'][sta]['datalogger']['value'] = summary_instrument['datalogger'][-1][-1]['model']
+                    station_dict['decom'][sta]['datalogger']['css'] = summary_instrument['datalogger'][-1][-1]['css']
+                    station_dict['decom'][sta]['datalogger']['idtag'] = summary_instrument['datalogger'][-1][-1]['idtag']
 
-    print " - Active stations: Add most recent instrument & baler history"
-    for sta in sorted(station_dict['active'].iterkeys()):
-        dlsta = '%s_%s' % (station_dict['active'][sta]['snet'], sta)
-        if verbose:
-            print "  - Processing active station: %s" % sta
-        station_dict['active'][sta]['orbstat'] = myorb.add_orbstat(orbstatus, sta)
-        if station_dict['active'][sta]['snet'] == 'TA':
-            try:
-                recent_inst_hist = instrument_history[sta][-1]
-            except LookupError,e:
-                print "instrument_history(): LookupError: %s" % e
-            else:
-                station_dict['active'][sta]['sensor'] = {}
-                station_dict['active'][sta]['datalogger'] = {}
-                station_dict['active'][sta]['sensor']['value'] = recent_inst_hist['sensor']['model']
-                station_dict['active'][sta]['sensor']['css'] = recent_inst_hist['sensor']['css']
-                station_dict['active'][sta]['datalogger']['value'] = recent_inst_hist['datalogger']['model']
-                station_dict['active'][sta]['datalogger']['css'] = recent_inst_hist['datalogger']['css']
-            if sta in infrasound_history:
-                station_dict['active'][sta]['infrasound'] = infrasound_history[sta]['current']
+                if dlsta in baler_history:
+                    station_dict['decom'][sta]['baler'] = baler_history[dlsta][-1]
+                # Need this for most recent sensor in top right
+                if sta in infrasound_history:
+                    if 'current' in infrasound_history[sta]:
+                        station_dict['decom'][sta]['infrasound'] = infrasound_history[sta]['current']
+                    else:
+                        station_dict['decom'][sta]['infrasound'] = infrasound_history[sta]['history'][-1]
+                else:
+                    station_dict['decom'][sta]['infrasound'] = 'unknown'
+
+        logfmt("Active stations: Add most recent instrument & baler history")
+        for sta in sorted(station_dict['active'].iterkeys()):
+            dlsta = '%s_%s' % (station_dict['active'][sta]['snet'], sta)
+            if verbose:
+                logfmt("\tProcessing active station: %s" % sta)
+            station_dict['active'][sta]['orbstat'] = myorb.add_orbstat(orbstatus, sta)
+            if station_dict['active'][sta]['snet'] == 'TA':
+                try:
+                    # recent_inst_hist = instrument_history[sta][-1]
+                    summary_instrument = db.summary_instrument_history(instrument_history[sta])
+                except LookupError,e:
+                    logfmt("\tinstrument_history(): LookupError: %s" % e)
+                    logfmt("\tAttempt to use the 'insname' field...")
+
+                    try:
+                        sensor_model, sensor_class = db.sensor_readable(station_dict['active'][sta]['insname'])
+                    except Exception,e:
+                        logfmt("\tError in sensor_readable() test: %s" % e)
+                    else:
+                        station_dict['active'][sta]['sensor'] = {'value':sensor_model, 'css':sensor_class}
+
+                    try:
+                        datalogger_model, datalogger_class = db.datalogger_readable(station_dict['active'][sta]['insname'])
+                    except Exception,e:
+                        logfmt("\tError in datalogger_readable() test: %s" % e)
+                    else:
+                        station_dict['active'][sta]['datalogger'] = {'value':datalogger_model, 'css':datalogger_class}
+
+                else:
+                    # More than one sensor allowed. Only one datalogger allowed
+                    station_dict['active'][sta]['sensor'] = []
+                    station_dict['active'][sta]['datalogger'] = {}
+                    for i in range(len(summary_instrument['sensor'][-1])):
+                        station_dict['active'][sta]['sensor'].append({
+                            'value':summary_instrument['sensor'][-1][i]['model'], 
+                            'css':summary_instrument['sensor'][-1][i]['css'],
+                            'ssident':summary_instrument['sensor'][-1][i]['ssident']
+                    })
+
+                    station_dict['active'][sta]['datalogger']['value'] = summary_instrument['datalogger'][-1][-1]['model']
+                    station_dict['active'][sta]['datalogger']['css'] = summary_instrument['datalogger'][-1][-1]['css']
+                    station_dict['active'][sta]['datalogger']['idtag'] = summary_instrument['datalogger'][-1][-1]['idtag']
+
+                if sta in infrasound_history:
+                    station_dict['active'][sta]['infrasound'] = infrasound_history[sta]['current']
+                else:
+                    station_dict['active'][sta]['infrasound'] = 'unknown'
+                if dlsta in baler_history:
+                    station_dict['active'][sta]['baler'] = baler_history[dlsta][-1]
             else:
                 station_dict['active'][sta]['infrasound'] = 'unknown'
-            if dlsta in baler_history:
-                station_dict['active'][sta]['baler'] = baler_history[dlsta][-1]
+                station_dict['active'][sta]['baler'] = 'unknown'
+        db.close_db()
+
+        if verbose or debug:
+            logfmt("Dump summary JSON file for all stations")
+        f = open(all_stations_json_file+'+', 'w') 
+        json.dump(station_dict, f, sort_keys=True, indent=2)
+        f.flush()
+
+        try:
+            os.rename(all_stations_json_file+'+', all_stations_json_file)
+        except OSError,e:
+            logfmt("\tCannot rename summary JSON file. Error: %s-%s" % (OSError, e))
+
+        if zipper:
+            if verbose or debug:
+                logfmt("\tCreate gzip file: %s.gz" % all_stations_json_file)
+            zip_me_up(all_stations_json_file)
+
+        logfmt("Create per station data objects")
+        # Create list of the station types to process in detail
+        if not subtype or subtype == 'all':
+            my_station_types = ['decom', 'adopt', 'active']
         else:
-            station_dict['active'][sta]['infrasound'] = 'unknown'
-            station_dict['active'][sta]['baler'] = 'unknown'
-    db.close_db()
+            my_station_types = [subtype]
+        persta = NetworkSummary(dbmaster, stapf, verbose, debug)
+        persta.open_db()
+        persta.get_metadata()
+        persta.create_deploy_pointer(override_subset)
+        # instrument_history = persta.create_instrument_history()
+        # baler_history = persta.baler_history()
+        # infrasound_history = persta.infrasound_sensors(infrasound_mapping)
+        calibration_history = persta.calibration_history(calibrations)
+        dlevents_history = persta.dlevents_history(dbops_q330)
+        comms_history = persta.comms_history()
+        deployment_history = persta.deployment_history()
 
-    if verbose:
-        print " - Dump summary JSON file for all stations"
-    f = open(all_stations_json_file+'+', 'w') 
-    json.dump(station_dict, f, sort_keys=True, indent=2)
-    f.flush()
+        logfmt("Start to create individual station JSON files")
+        # Process each station type
+        for sta_type in my_station_types:
+            logfmt("Start working on '%s' stations" % sta_type)
+            if sta_type == 'decom':
+                sta_type_dict = persta.process_decom_stations('detail')
+            elif sta_type == 'adopt':
+                sta_type_dict = persta.process_adopted_stations('detail')
+            elif sta_type == 'active':
+                sta_type_dict = persta.process_active_stations('detail')
 
-    try:
-        os.rename(all_stations_json_file+'+', all_stations_json_file)
-    except OSError:
-        print "  - Cannot rename summray JSON file. Permissions problem?"
+            for sta in sorted(sta_type_dict.iterkeys()):
+                dlsta = '%s_%s' % (sta_type_dict[sta]['snet'], sta)
+                sta_dict = {
+                    "baler_history": {}, 
+                    "calibration_history": {}, 
+                    "comms_history": {}, 
+                    "dlevents": {}, 
+                    "infrasound_history": {},
+                    "instrument_history": {}, 
+                    "metadata": {}
+                }
+                if verbose or debug:
+                    logfmt("\tProcessing station detail for %s" % sta)
+                if debug:
+                    logfmt("\tMap stype_dict[%s] to this_sta_dict['metadata']" % sta)
+                sta_dict['metadata'] = sta_type_dict[sta]
 
-    if zipper:
-        if verbose:
-            print "- Create gzip file: %s.gz" % all_stations_json_file
-        zip_me_up(all_stations_json_file)
+                if debug:
+                    logfmt("\tCurrent instrumentation processing")
+                try:
+                    # recent_inst_hist = instrument_history[sta][-1]
+                    summary_instrument = db.summary_instrument_history(instrument_history[sta])
+                except LookupError,e:
+                    logfmt("\tinstrument_history(): Error: %s-%s" % (LookupError, e))
+                    logfmt("\tAttempt to use the 'insname' field...")
 
-    print "- Start to create individual station JSON files at %s" % strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
-    # Create list of the station types to process in detail
-    if not subtype or subtype == 'all':
-        my_station_types = ['decom', 'adopt', 'active']
-    else:
-        my_station_types = [subtype]
-    persta = NetworkSummary(dbmaster, stapf)
-    persta.open_db()
-    persta.get_metadata()
-    persta.create_deploy_pointer()
-    # instrument_history = persta.create_instrument_history()
-    # baler_history = persta.baler_history()
-    # infrasound_history = persta.infrasound_sensors(infrasound_mapping)
-    calibration_history = persta.calibration_history(calibrations)
-    dlevents_history = persta.dlevents_history(dbops_q330)
-    comms_history = persta.comms_history()
-    deployment_history = persta.deployment_history()
+                    try:
+                        sensor_model, sensor_class = db.sensor_readable(sta_type_dict[sta]['insname'])
+                    except Exception,e:
+                        logfmt("\tError in sensor_readable() test: %s" % e)
+                    else:
+                        sta_type_dict[sta]['sensor'] = {'value':sensor_model, 'css':sensor_class}
 
-    # Process each station type
-    for sta_type in my_station_types:
-        print "  - Start working on %s stations at %s" % (sta_type, strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime()))
-        if sta_type == 'decom':
-            sta_type_dict = persta.process_decom_stations('detail')
-        elif sta_type == 'adopt':
-            sta_type_dict = persta.process_adopted_stations('detail')
-        elif sta_type == 'active':
-            sta_type_dict = persta.process_active_stations('detail')
+                    try:
+                        datalogger_model, datalogger_class = db.datalogger_readable(sta_type_dict[sta]['insname'])
+                    except Exception,e:
+                        logfmt("\tError in datalogger_readable() test: %s" % e)
+                    else:
+                        sta_type_dict[sta]['datalogger'] = {'value':datalogger_model, 'css':datalogger_class}
 
-        for sta in sorted(sta_type_dict.iterkeys()):
-            dlsta = '%s_%s' % (sta_type_dict[sta]['snet'], sta)
-            sta_dict = {
-                "baler_history": {}, 
-                "calibration_history": {}, 
-                "comms_history": {}, 
-                "dlevents": {}, 
-                "infrasound_history": {},
-                "instrument_history": {}, 
-                "metadata": {}
-            }
-            if verbose:
-                print "  - Processing station detail for %s" % sta
-                print "   - Map stype_dict[%s] to this_sta_dict['metadata']" % sta
-            sta_dict['metadata'] = sta_type_dict[sta]
+                else:
+                    # More than one sensor allowed. Only one datalogger allowed
+                    sta_dict['metadata']['sensor'] = []
+                    sta_dict['metadata']['datalogger'] = {}
+                    for i in range(len(summary_instrument['sensor'][-1])):
+                        sta_dict['metadata']['sensor'].append({
+                            'value':summary_instrument['sensor'][-1][i]['model'], 
+                            'css':summary_instrument['sensor'][-1][i]['css'],
+                            'ssident':summary_instrument['sensor'][-1][i]['ssident']
+                    })
 
-            if verbose:
-                print "   - Current instrumentation"
-            try:
-                recent_inst_hist = instrument_history[sta][-1]
-            except LookupError,e:
-                print "instrument_history(): LookupError: %s" % e
-            else:
-                sta_dict['metadata']['sensor'] = {}
-                sta_dict['metadata']['datalogger'] = {}
-                sta_dict['metadata']['sensor']['value'] = recent_inst_hist['sensor']['model']
-                sta_dict['metadata']['sensor']['css'] = recent_inst_hist['sensor']['css']
-                sta_dict['metadata']['datalogger']['value'] = recent_inst_hist['datalogger']['model']
-                sta_dict['metadata']['datalogger']['css'] = recent_inst_hist['datalogger']['css']
+                    sta_dict['metadata']['datalogger']['value'] = summary_instrument['datalogger'][-1][-1]['model']
+                    sta_dict['metadata']['datalogger']['css'] = summary_instrument['datalogger'][-1][-1]['css']
+                    sta_dict['metadata']['datalogger']['idtag'] = summary_instrument['datalogger'][-1][-1]['idtag']
 
-            if sta_dict['metadata']['snet'] == 'TA':
-                if sta in infrasound_history:
-                    sta_dict['infrasound_history'] = infrasound_history[sta]['history']
-                if dlsta in baler_history:
-                    sta_dict['baler_history'] = baler_history[dlsta]
-                if sta in instrument_history:
-                    sta_dict['instrument_history'] = instrument_history[sta]
-                if sta in calibration_history:
-                    sta_dict['calibration_history'] = calibration_history[sta]
-                if dlsta in dlevents_history:
-                    sta_dict['dlevents'] = dlevents_history[dlsta]
 
-            if sta in comms_history:
-                sta_dict['comms_history'] = comms_history[sta]
+                if sta_dict['metadata']['snet'] == 'TA':
+                    if sta in infrasound_history:
+                        sta_dict['infrasound_history'] = infrasound_history[sta]['history']
+                    if dlsta in baler_history:
+                        sta_dict['baler_history'] = baler_history[dlsta]
+                    if sta in instrument_history:
+                        sta_dict['instrument_history'] = instrument_history[sta]
+                        # sta_dict['instrument_history'] = summary_instrument
+                    if sta in calibration_history:
+                        sta_dict['calibration_history'] = calibration_history[sta]
+                    if dlsta in dlevents_history:
+                        sta_dict['dlevents'] = dlevents_history[dlsta]
 
-            if sta in deployment_history:
-                sta_dict['deployment_history'] = deployment_history[sta]
+                if sta in comms_history:
+                    sta_dict['comms_history'] = comms_history[sta]
 
-            if verbose:
-                print "   - Per station JSON file..."
-            sta_file = '%s/%s_%s.json' % (json_path, sta_dict['metadata']['snet'], sta)
-            sta_file_pre = '%s+' % sta_file
-            fs = open(sta_file_pre, 'w') 
-            json.dump(sta_dict, fs, sort_keys=True, indent=2)
-            fs.flush()
-            try:
-                os.rename(sta_file_pre, sta_file)
-            except OSError,e:
-                print "- Renaming JSON file to %s failed" % sta_file
+                if sta in deployment_history:
+                    sta_dict['deployment_history'] = deployment_history[sta]
 
-    persta.close_db()
-    print "End of script at time %s" % strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
+                if debug:
+                    logfmt("\tSaving per station JSON file")
+                sta_file = '%s/%s_%s.json' % (json_path, sta_dict['metadata']['snet'], sta)
+                sta_file_pre = '%s+' % sta_file
+                fs = open(sta_file_pre, 'w') 
+                json.dump(sta_dict, fs, sort_keys=True, indent=2)
+                fs.flush()
+                try:
+                    os.rename(sta_file_pre, sta_file)
+                except OSError,e:
+                    logfmt("\tRenaming JSON file to %s failed: Error: %s-%s" % (sta_file, OSError, e))
+        persta.close_db()
     return 0
 
 if __name__ == '__main__':
