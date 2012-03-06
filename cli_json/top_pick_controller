@@ -6,8 +6,8 @@ Python Flickr API to search & retrieve station photos
 
 @package  Datascope
 @author   Rob Newman <robertlnewman@gmail.com> 858.822.1333
-@version  1.2
-@modified 2011-07-14
+@version  1.2.1
+@modified 2012-03-06
 @license  MIT-style license
 @notes    Cannot use multiprocessing.Lock() due to Python 
           issue 3770. Will result in the following output:
