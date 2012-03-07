@@ -1,0 +1,18 @@
+# Some specific params
+# that are not in stations.pf
+# nor common.pf but
+# are relevant to a per-instance
+# db2json
+#
+# robertlnewman@gmail.com
+# 2012-03-05
+
+auth_snet    TA
+override_subset    &Tbl{
+    chan=~/^(BH|HN).*/||(snet=~/PO/ && chan=~/^HH.*/)
+}
+adoptions    True
+balers    True
+infrasound    True
+calibrations    True
+dlevents    True
