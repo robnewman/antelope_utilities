@@ -430,7 +430,7 @@ class NetworkSummary:
             else:
                 return False
         # }}}
- 
+
     def idtag_determiner(self, dlogger_id):
         """The idtag field is only
         in dlsite, staq330 and q330comm
@@ -603,9 +603,9 @@ class NetworkSummary:
         of interest
         """
         # {{{ create_deploy_pointer
-        dbptr = datascope.dblookup(self.db, '', 'site', '', '')
-        dbptr.join('snetsta')
-        dbptr.join('deployment', outer=True)
+        dbptr = datascope.dblookup(self.db, '', 'deployment', '', '')
+        dbptr.join('site', outer=True)
+        dbptr.join('snetsta', outer=True)
         dbptr.join('sitechan', outer=True)
         dbptr.join('comm', outer=True)
         dbptr.join('sensor', outer=True)
