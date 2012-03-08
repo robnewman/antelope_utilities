@@ -1344,23 +1344,7 @@ def main():
                 try:
                     summary_instrument = db.summary_instrument_history(instrument_history[sta], sta)
                 except LookupError,e:
-                    logfmt("\tinstrument_history(): LookupError: %s" % e)
-                    logfmt("\tAttempt to use the 'insname' field...")
-
-                    try:
-                        sensor_model, sensor_class = db.sensor_readable(station_dict['decom'][sta]['insname'])
-                    except Exception,e:
-                        logfmt("\tError in sensor_readable() test: %s" % e)
-                    else:
-                        station_dict['decom'][sta]['sensor'] = {'value':sensor_model, 'css':sensor_class}
-
-                    try:
-                        datalogger_model, datalogger_class = db.datalogger_readable(station_dict['decom'][sta]['insname'])
-                    except Exception,e:
-                        logfmt("\tError in datalogger_readable() test: %s" % e)
-                    else:
-                        station_dict['decom'][sta]['datalogger'] = {'value':datalogger_model, 'css':datalogger_class}
-
+                    logfmt("\tsummary_instrument_history(): LookupError: %s" % e)
                 else:
                     # More than one sensor allowed. Only one datalogger allowed
                     station_dict['decom'][sta]['sensor'] = []
@@ -1397,23 +1381,7 @@ def main():
                 try:
                     summary_instrument = db.summary_instrument_history(instrument_history[sta], sta)
                 except LookupError,e:
-                    logfmt("\tinstrument_history(): LookupError: %s" % e)
-                    logfmt("\tAttempt to use the 'insname' field...")
-
-                    try:
-                        sensor_model, sensor_class = db.sensor_readable(station_dict['active'][sta]['insname'])
-                    except Exception,e:
-                        logfmt("\tError in sensor_readable() test: %s" % e)
-                    else:
-                        station_dict['active'][sta]['sensor'] = {'value':sensor_model, 'css':sensor_class}
-
-                    try:
-                        datalogger_model, datalogger_class = db.datalogger_readable(station_dict['active'][sta]['insname'])
-                    except Exception,e:
-                        logfmt("\tError in datalogger_readable() test: %s" % e)
-                    else:
-                        station_dict['active'][sta]['datalogger'] = {'value':datalogger_model, 'css':datalogger_class}
-
+                    logfmt("\tsummary_instrument_history(): LookupError: %s" % e)
                 else:
                     # More than one sensor allowed. Only one datalogger allowed
                     station_dict['active'][sta]['sensor'] = []
@@ -1512,23 +1480,7 @@ def main():
                 try:
                     summary_instrument = db.summary_instrument_history(instrument_history[sta], sta)
                 except LookupError,e:
-                    logfmt("\tinstrument_history(): Error: %s-%s" % (LookupError, e))
-                    logfmt("\tAttempt to use the 'insname' field...")
-
-                    try:
-                        sensor_model, sensor_class = db.sensor_readable(sta_type_dict[sta]['insname'])
-                    except Exception,e:
-                        logfmt("\tError in sensor_readable() test: %s" % e)
-                    else:
-                        sta_dict['metadata']['sensor'] = {'value':sensor_model, 'css':sensor_class}
-
-                    try:
-                        datalogger_model, datalogger_class = db.datalogger_readable(sta_type_dict[sta]['insname'])
-                    except Exception,e:
-                        logfmt("\tError in datalogger_readable() test: %s" % e)
-                    else:
-                        sta_dict['metadata']['datalogger'] = {'value':datalogger_model, 'css':datalogger_class}
-
+                    logfmt("\tsummary_instrument_history(): Error: %s-%s" % (LookupError, e))
                 else:
                     # More than one sensor allowed. Only one datalogger allowed
                     if summary_instrument and 'sensor' in summary_instrument and 'datalogger' in summary_instrument:
