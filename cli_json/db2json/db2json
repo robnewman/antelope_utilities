@@ -511,7 +511,8 @@ class NetworkSummary:
 
         sitechan_hist_dbptr = datascope.dblookup(self.dbptr,
                                                  '', 'sitechan', '', '')
-        sitechan_hist_dbptr.join('snetsta')
+        sitechan_hist_dbptr.join('sensor')
+        sitechan_hist_dbptr.join('instrument')
 
         if override_subset:
             logfmt('create_instrument_history(): Apply override_subset(s)')
@@ -542,12 +543,14 @@ class NetworkSummary:
                  site_offdate,
                  site_descrip,
                  site_hang,
-                 site_vang) = sitechan_hist_dbptr.getv('chan',
-                                                       'ondate',
-                                                       'offdate',
-                                                       'descrip',
-                                                       'hang',
-                                                       'vang')
+                 site_vang,
+                 site_insname) = sitechan_hist_dbptr.getv('chan',
+                                                          'ondate',
+                                                          'offdate',
+                                                          'descrip',
+                                                          'hang',
+                                                          'vang',
+                                                          'insname')
                 # At a minimum we get the following:
                 ins_hist_obj = {
                     'channel':site_chan,
@@ -587,8 +590,23 @@ class NetworkSummary:
                         ins_hist_obj.update(datalogger=datalogger)
                         ins_hist_obj.update(sensor=sensor)
                     else:
+                        # Alternatively try the insname field
+                        this_sensor = self.sensor_readable(site_insname)
+                        this_datalogger = self.datalogger_readable(site_insname)
+                        sensor = {
+                            'model':this_sensor[0],
+                            'css':this_sensor[1],
+                            'ssident':'Unknown'
+                        }
+                        datalogger = {
+                            'model':this_datalogger[0],
+                            'css':this_datalogger[1],
+                            'idtag':'Unknown'
+                        }
                         ins_hist_obj.update(sensor_id=site_sensorid)
                         ins_hist_obj.update(dlogger_id=site_dloggerid)
+                        ins_hist_obj.update(datalogger=datalogger)
+                        ins_hist_obj.update(sensor=sensor)
                 instrument_history[sta].append(ins_hist_obj)
         sitechan_hist_grp_dbptr.free()
         sitechan_hist_dbptr.free()
@@ -1178,11 +1196,15 @@ class NetworkSummary:
 
         for i in range(len(sta_ins_hist)):
             if 'Z' in sta_ins_hist[i]['channel']:
-                ondate = sta_ins_hist[i]['ondate']
+                # ondate = sta_ins_hist[i]['ondate']
+                offdate = sta_ins_hist[i]['offdate']
+                if offdate == -1:
+                    # Force offdate to be the maximum
+                    offdate = 9999999
                 if 'datalogger' in sta_ins_hist[i]:
-                    datalogger_hist[ondate].append(sta_ins_hist[i]['datalogger'])
+                    datalogger_hist[offdate].append(sta_ins_hist[i]['datalogger'])
                 if 'sensor' in sta_ins_hist[i]:
-                    sensor_hist[ondate].append(sta_ins_hist[i]['sensor'])
+                    sensor_hist[offdate].append(sta_ins_hist[i]['sensor'])
 
         # Now loop over dicts and return a (ordered) list
         for key in sorted(datalogger_hist.iterkeys()):
