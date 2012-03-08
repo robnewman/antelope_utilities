@@ -511,6 +511,7 @@ class NetworkSummary:
 
         sitechan_hist_dbptr = datascope.dblookup(self.dbptr,
                                                  '', 'sitechan', '', '')
+        sitechan_hist_dbptr.join('snetsta')
         sitechan_hist_dbptr.join('sensor')
         sitechan_hist_dbptr.join('instrument')
 
