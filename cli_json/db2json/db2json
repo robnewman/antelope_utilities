@@ -274,6 +274,7 @@ class ParseOrb:
         else:
             if myorb.select(selection_string) < 1:
                 logfmt("\tProblem with the orb select functionality!")
+                logfmt("\tMatch regex: %s" % selection_string)
             else:
                 if self.verbose:
                     logfmt("\tNumber of sources selected: %d" % myorb.select(selection_string))
