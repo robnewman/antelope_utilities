@@ -1,0 +1,255 @@
+#!/usr/bin/env python
+
+"""
+Network-wide mass recenters to JSON run via cron daily
+
+@package  Datascope
+@author   Rob Newman <robertlnewman@gmail.com> 858.822.1333
+@modified 2012-03-12
+@license  MIT style license
+"""
+
+import sys
+import os
+import json
+import gzip
+import string
+import tempfile
+from optparse import OptionParser
+from collections import defaultdict
+from pprint import pprint
+from time import time
+
+# Load datascope functions
+sys.path.append('%s/local/data/python/antelope' % os.environ['ANTELOPE'])
+import datascope
+from stock import pfupdate, pfget, strtime, epoch2str
+
+# {{{ General vars
+common_pf = 'common.pf'
+pfupdate(common_pf)
+cache_json = pfget(common_pf, 'CACHEJSON')
+massrecenters_scale = pfget(common_pf, 'MASSRECENTERS_SCALE')
+massrecenters_arr = pfget(common_pf, 'MASSRECENTERS_ARR')
+json_path = '%s/tools' % cache_json
+dbmaster = pfget(common_pf, 'USARRAY_DBMASTER')
+cache_file_path  = '%s/massrecenters/mrs.json' % json_path
+output_file_path = '%s+' % cache_file_path
+# }}}
+
+def logfmt(message):
+    """Output a log
+    message with a
+    timestamp"""
+    # {{{ logfmt
+    curtime = strtime(time())
+    print curtime, message
+    # }}}
+
+def configure():
+    """Parse command
+    line args
+    """
+    # {{{ configure
+    usage = "Usage: %prog [options]"
+    parser = OptionParser(usage=usage)
+    parser.add_option("-v", action="store_true", dest="verbose",
+        help="verbose output", default=False)
+    parser.add_option("-x", action="store_true", dest="debug",
+        help="debug output", default=False)
+    (options, args) = parser.parse_args()
+    if options.verbose:
+        verbose = True
+    else:
+        verbose = False
+    if options.debug:
+        debug = True
+    else:
+        debug = False
+    return verbose, debug
+    # }}}
+
+def get_sta_dict(verbosity=False):
+    """Get station
+    dictionary
+    """
+    # {{{ get_sta_dict
+    if verbosity > 0:
+        logfmt('Create the stations dictionary')
+    stations = defaultdict(dict)
+    db = datascope.dbopen(dbmaster, 'r')
+    db.lookup(table='deployment')
+    db.join('site', outer=True)
+    db.subset('snet =~ /TA/')
+    for i in range(db.query('dbRECORD_COUNT')):
+         db[3] = i
+         (snet,
+          sta,
+          time,
+          endtime,
+          lat,
+          lon,
+          elev,
+          staname) = db.getv('snet',
+                             'sta',
+                             'time',
+                             'endtime',
+                             'lat',
+                             'lon',
+                             'elev',
+                             'staname')
+         dlname = '%s_%s' % (snet, sta)
+         stations[dlname]['time'] = epoch2str(time, '%Y-%m-%d %H:%M:%D')
+         if endtime > 9999999999:
+             stations[dlname]['endtime'] = '&mdash;'
+         else:
+             stations[dlname]['endtime'] = epoch2str(endtime, '%Y-%m-%d %H:%M:%D') 
+         stations[dlname]['lat'] = lat
+         stations[dlname]['lon'] = lon
+         stations[dlname]['elev'] = elev
+         stations[dlname]['staname'] = staname
+
+    if verbosity > 1:
+        pprint(stations)
+    return stations
+    # }}}
+
+def get_dlname_events(verbosity=False):
+    """Get all mass recenter
+    events associated with
+    a dlname"""
+    # {{{ get_dlname_events
+    if verbosity > 0:
+        logfmt('Generate the dlevents dictionary')
+    dlevents = defaultdict(list)
+    dlev_db = datascope.dbopen(dbmaster, 'r')
+    dlev_db.lookup(table='dlevent')
+    dlev_db.subset('dlevtype =~ /^massrecenter.*/')
+    dlev_db.sort(('dlname','time'))
+    dlev_grp = datascope.dbgroup(dlev_db, 'dlname')
+    for i in range(dlev_grp.query('dbRECORD_COUNT')):
+        dlev_grp[3] = i
+        (dlname, [db,
+                  view,
+                  end_rec,
+                  start_rec]) = dlev_grp.getv('dlname',
+                                              'bundle')
+        for j in range(start_rec, end_rec):
+            dlev_db[3] = j
+            (dlname, time) = dlev_db.getv('dlname', 'time')
+            dlevents[dlname].append(int(time))
+    if verbosity > 1:
+        pprint(dlevents)
+    return dlevents
+    # }}}
+
+def process_dlevents(stations, dlevents, verbosity=False):
+    """Iterate over stations
+    and append all the mass
+    recenters
+    """
+    # {{{ process_dlevents
+    if verbosity > 0:
+        logfmt('Add dlevents to the stations dictionary')
+    for i in sorted(stations.iterkeys()):
+        if i in dlevents:
+            stations[i].update(dlevs=dlevents[i])
+            total = len(dlevents[i])
+        else:
+            if verbosity > 1:
+                logfmt('\t\tStation %s: no massrecenters' % i)
+            stations[i].update(dlevs=[])
+            total = 0
+        stations[i].update(dlevstotal=total)
+
+        for j in massrecenters_scale:
+            if massrecenters_arr[j]['max'] == -1:
+                maximum = 99999999
+            else:
+                maximum = massrecenters_arr[j]['max']
+            if massrecenters_arr[j]['min'] == -1:
+                if total == maximum:
+                    color = massrecenters_arr[j]['hexidecimal']
+            else:
+                if total <= maximum and total >= massrecenters_arr[j]['min']:
+                    color = massrecenters_arr[j]['hexidecimal']
+        if color:
+            stations[i].update(dlevscolor=color)
+        else:
+            logfmt('\tNo color for dlname %s' % stations[i])
+
+    if verbosity > 1:
+        logfmt('\tPretty print for dlname TA_034A for debugging:')
+        pprint(stations['TA_034A'])
+
+    return stations
+    # }}}
+
+def create_scale(verbosity):
+    """Create scale
+    dictionary
+    """
+    # {{{ create_scale
+    scale = []
+    for i in massrecenters_scale:
+        scale.append(massrecenters_arr[i])
+
+    if verbosity > 1:
+        pprint(scale)
+
+    return scale
+    # }}}
+
+def create_metadata(verbosity):
+    """Create metadata
+    dictionary
+    """
+    # {{{ create_metadata
+    metadata = defaultdict(dict)
+    metadata['last_modified_readable'] = epoch2str(time(), "%Y-%m-%d %H:%M:%S")
+    metadata['last_modified'] = time()
+    metadata['caption'] = 'Frequency of mass recenters'
+
+    if verbosity > 1:
+        pprint(metadata)
+
+    return metadata
+    # }}}
+
+def main():
+    """Process photo
+    directory contents
+    """
+    logfmt('Process network-wide mass recenters')
+    verbosity = 0
+    verbose, debug = configure()
+    if verbose:
+        verbosity += 1
+    if debug:
+        verbosity += 2
+    stations = get_sta_dict(verbosity)
+    dlevents = get_dlname_events(verbosity)
+
+    per_sta_dlevents = defaultdict(dict)
+
+    per_sta_dlevents['stations'] = process_dlevents(stations, dlevents, verbosity)
+
+    scale = create_scale(verbosity)
+    per_sta_dlevents.update(scale=scale)
+
+    metadata = create_metadata(verbosity)
+    per_sta_dlevents.update(metadata=metadata)
+
+    logfmt("Dump JSON file '%s'" % cache_file_path)
+    f = open(output_file_path, 'w') 
+    json.dump(per_sta_dlevents, f, sort_keys=True, indent=2)
+    f.flush()
+
+    # Move the file to replace the older one
+    try:
+        os.rename(output_file_path, cache_file_path)
+    except OSError,e:
+        logfmt("OSError: %s when renaming '%s' to '%s'" % (e, output_file_path, cache_file_path))
+
+if __name__ == '__main__':
+    main()
