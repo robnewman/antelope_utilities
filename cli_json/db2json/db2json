@@ -8,7 +8,7 @@ Summary & individual stations
 @author   Rob Newman <robertlnewman@gmail.com> 858.822.1333
 @version  2.2
 @license  MIT style license
-@modified 2012-03-07
+@modified 2012-03-08
 @notes    1. Rewrite to only have dbpointers open for a short
           while - Datascope does not like realtime dbs being
           open when edits can happen (dbpointers all become
@@ -38,16 +38,15 @@ import string
 import tempfile
 import re
 import gzip
-from time import time, gmtime, strftime
-from pprint import pprint
-from collections import defaultdict
-
 # Load datascope functions
 sys.path.append(os.environ['ANTELOPE'] + '/local/data/python/antelope')
 import datascope
 import orb
 from stock import pfupdate, pffiles, pfget, epoch2str, epoch, str2epoch, strtime, yearday
 from optparse import OptionParser
+from time import time, gmtime, strftime
+from pprint import pprint
+from collections import defaultdict
 
 subtype_list = ['all']
 station_dict = {'decom':{}, 'adopt':{}, 'active':{}}
@@ -274,7 +273,6 @@ class ParseOrb:
         else:
             if myorb.select(selection_string) < 1:
                 logfmt("\tProblem with the orb select functionality!")
-                logfmt("\tMatch regex: %s" % selection_string)
             else:
                 if self.verbose:
                     logfmt("\tNumber of sources selected: %d" % myorb.select(selection_string))
@@ -431,7 +429,7 @@ class NetworkSummary:
             else:
                 return False
         # }}}
-
+ 
     def idtag_determiner(self, dlogger_id):
         """The idtag field is only
         in dlsite, staq330 and q330comm
@@ -1198,15 +1196,11 @@ class NetworkSummary:
 
         for i in range(len(sta_ins_hist)):
             if 'Z' in sta_ins_hist[i]['channel']:
-                # ondate = sta_ins_hist[i]['ondate']
-                offdate = sta_ins_hist[i]['offdate']
-                if offdate == -1:
-                    # Force offdate to be the maximum
-                    offdate = 9999999
+                ondate = sta_ins_hist[i]['ondate']
                 if 'datalogger' in sta_ins_hist[i]:
-                    datalogger_hist[offdate].append(sta_ins_hist[i]['datalogger'])
+                    datalogger_hist[ondate].append(sta_ins_hist[i]['datalogger'])
                 if 'sensor' in sta_ins_hist[i]:
-                    sensor_hist[offdate].append(sta_ins_hist[i]['sensor'])
+                    sensor_hist[ondate].append(sta_ins_hist[i]['sensor'])
 
         # Now loop over dicts and return a (ordered) list
         for key in sorted(datalogger_hist.iterkeys()):
@@ -1283,22 +1277,45 @@ def main():
     calibrations = False
     dlevents = False
 
-    if pfget(db2jsonpf, 'override_subset'):
+    try:
         override_subset = pfget(db2jsonpf, 'override_subset')
-    if pfget(db2jsonpf, 'auth_snet'):
+    except Exception, e:
+        logfmt("No 'override_subset' defined in pf '%s'" % db2jsonpf)
+
+    try:
         auth_snet = pfget(db2jsonpf, 'auth_snet')
-    if pfget(db2jsonpf, 'adoptions'):
+    except Exception, e:
+        logfmt("No 'auth_snet' defined in pf '%s'" % db2jsonpf)
+
+    try:
         adoptions = pfget(db2jsonpf, 'adoptions')
-    if pfget(db2jsonpf, 'balers'):
+    except Exception, e:
+        logfmt("No 'adoptions' defined in pf '%s'" % db2jsonpf)
+
+    try:
         balers = pfget(db2jsonpf, 'balers')
-    if pfget(db2jsonpf, 'infrasound'):
+    except Exception, e:
+        logfmt("No 'balers' defined in pf '%s'" % db2jsonpf)
+
+    try:
         infrasound = pfget(db2jsonpf, 'infrasound')
-    if pfget(db2jsonpf, 'calibrations'):
+    except Exception, e:
+        logfmt("No 'infrasound' defined in pf '%s'" % db2jsonpf)
+
+    try:
         calibrations = pfget(db2jsonpf, 'calibrations')
-    if pfget(db2jsonpf, 'dlevents'):
+    except Exception, e:
+        logfmt("No 'calibrations' defined in pf '%s'" % db2jsonpf)
+
+    try:
         dlevents = pfget(db2jsonpf, 'dlevents')
-    if pfget(db2jsonpf, 'json_out'):
+    except Exception, e:
+        logfmt("No 'dlevents' defined in pf '%s'" % db2jsonpf)
+
+    try:
         all_stations_json_file = pfget(db2jsonpf, 'json_out')
+    except Exception, e:
+        logfmt("No 'json_out' defined in pf '%s'" % db2jsonpf)
 
     if verbose or debug:
         logfmt("Dbmaster path '%s'" % dbmaster)
