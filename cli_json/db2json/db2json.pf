@@ -16,3 +16,5 @@ balers    True
 infrasound    True
 calibrations    True
 dlevents    True
+
+json_out    /path/to/cachejson/stations.json

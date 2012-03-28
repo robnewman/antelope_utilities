@@ -1297,6 +1297,8 @@ def main():
         calibrations = pfget(db2jsonpf, 'calibrations')
     if pfget(db2jsonpf, 'dlevents'):
         dlevents = pfget(db2jsonpf, 'dlevents')
+    if pfget(db2jsonpf, 'json_out'):
+        all_stations_json_file = pfget(db2jsonpf, 'json_out')
 
     if verbose or debug:
         logfmt("Dbmaster path '%s'" % dbmaster)
