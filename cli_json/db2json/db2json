@@ -1276,6 +1276,7 @@ def main():
     infrasound = False
     calibrations = False
     dlevents = False
+    encoding = False
 
     try:
         override_subset = pfget(db2jsonpf, 'override_subset')
@@ -1316,6 +1317,11 @@ def main():
         all_stations_json_file = pfget(db2jsonpf, 'json_out')
     except Exception, e:
         logfmt("No 'json_out' defined in pf '%s'" % db2jsonpf)
+
+    try:
+        encoding = pfget(db2jsonpf, 'encoding')
+    except Exception, e:
+        logfmt(logfmt("No 'encoding' defined in pf '%s'. Using default (UTF-8)" % db2jsonpf)
 
     if verbose or debug:
         logfmt("Dbmaster path '%s'" % dbmaster)
@@ -1432,7 +1438,15 @@ def main():
         if verbose or debug:
             logfmt("Dump summary JSON file for all stations")
         f = open(all_stations_json_file+'+', 'w') 
-        json.dump(station_dict, f, sort_keys=True, indent=2)
+
+        if encoding:
+            try:
+                json.dump(station_dict, f, sort_keys=True, indent=2, encoding=encoding)
+            except Exception, e:
+                logfmt("JSON encoding error for '%s': %s -, %s" % (encoding, Exception, e))
+        else:
+            json.dump(station_dict, f, sort_keys=True, indent=2)
+
         f.flush()
 
         try:
@@ -1542,9 +1556,18 @@ def main():
                     logfmt("\tSaving per station JSON file")
                 sta_file = '%s/%s_%s.json' % (json_path, sta_dict['metadata']['snet'], sta)
                 sta_file_pre = '%s+' % sta_file
-                fs = open(sta_file_pre, 'w') 
-                json.dump(sta_dict, fs, sort_keys=True, indent=2)
+                fs = open(sta_file_pre, 'w')
+
+                if encoding:
+                    try:
+                        json.dump(sta_dict, fs, sort_keys=True, indent=2, encoding=encoding)
+                    except Exception, e:
+                        logfmt("JSON encoding error for '%s': %s -, %s" % (encoding, Exception, e))
+                else:
+                    json.dump(sta_dict, fs, sort_keys=True, indent=2)
+
                 fs.flush()
+
                 try:
                     os.rename(sta_file_pre, sta_file)
                 except OSError,e:

@@ -17,3 +17,4 @@ calibrations    True
 dlevents    True
 
 json_out    /path/to/cachejson/stations.json
+encoding    ISO-8859-1
