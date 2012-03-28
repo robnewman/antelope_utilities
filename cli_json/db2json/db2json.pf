@@ -5,7 +5,6 @@
 # db2json
 #
 # robertlnewman@gmail.com
-# 2012-03-05
 
 auth_snet    TA
 override_subset    &Tbl{
