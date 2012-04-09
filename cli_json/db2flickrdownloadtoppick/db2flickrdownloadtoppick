@@ -451,15 +451,7 @@ def main():
     out_str += logfmt('All TA stations checked. Goodbye..', 's')
     out_str += logfmt('Flickr Python Photo Downloader finished', 's')
 
-    # Sendmail command
-    # sm = os.popen("%s -t" % params['sendmail'], 'w' ) 
-    # sm.write("To: %s\n" % ','.join(list(recipients)))
-    # sm.write("Subject: Flickr photo archive retrieval output\n")
-    # sm.write(out_str)
-    # exitcode = sm.close()
-
-    # if exitcode:
-    #     print "Exit code: %s" % exitcode
+    # Send mail
 
     msg_from = 'Real-Time Manager <rt@anfwebproc.ucsd.edu>'
     msg_to = ','.join(list(recipients))
