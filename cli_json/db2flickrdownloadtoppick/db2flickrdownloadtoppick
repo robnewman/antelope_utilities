@@ -1,0 +1,481 @@
+#!/usr/bin/env python
+
+'''
+Use multiprocessing and subprocess and Beej's 
+Python Flickr API to search & retrieve station photos
+
+@package  Datascope
+@author   Rob Newman <robertlnewman@gmail.com> 858.822.1333
+@version  1.3
+@modified 2012-04-09
+@license  MIT-style license
+@notes    1. Cannot use multiprocessing.Lock() due to Python 
+             issue 3770. Will result in the following output:
+             'ImportError: This platform lacks a functioning 
+             sem_open implementation, therefore, the required 
+             synchronization primitives needed will not 
+             function, see issue 3770.'
+          2. Update to use the $ANF/lib/python version of the
+             Flickr API, which is 1.4.2
+'''
+
+# Import modules
+import sys
+import os
+import glob
+import json
+import multiprocessing
+import subprocess
+from time import time, gmtime, strftime, strptime, mktime
+from optparse import OptionParser
+
+from pprint import pprint
+
+try:
+    import flickrapi
+except ImportError:
+    print "Import Error: Do  you have the Python Flickr API module installed correctly?"
+
+import urllib2
+import smtplib
+from email.mime.text import MIMEText
+
+# For Antelope
+sys.path.append( os.environ['ANTELOPE'] + '/local/data/python/antelope' )
+import datascope
+from stock import pfupdate, pfget, pffiles, strtime
+
+# Get config parameter file vars
+common_pf = 'common.pf'
+pfupdate(common_pf)
+cache_json = pfget(common_pf, 'CACHEJSON')
+dbmaster = pfget(common_pf, 'USARRAY_DBMASTER')
+photo_path = pfget(common_pf, 'CACHE_TOP_PICK')
+json_file_path = '%s/stations/stations.json' % cache_json
+num_processes = int(multiprocessing.cpu_count()/3) # Be nice & only use a third of available processors
+then = time() - 604800 # Within the last week ago
+
+def configure():
+    """Parse command line arguments
+    """
+    # {{{ configure
+    usage = "Usage: %prog [options]"
+    parser = OptionParser(usage=usage)
+    parser.add_option("-v", "--verbose", action="store_true", dest="verbose", 
+                      help="verbose output", default=False)
+    parser.add_option("-s", "--station", action="store", dest="station_override", 
+                      help="station override", default=False)
+    parser.add_option("-t", "--type", action="store", type="string", dest="qtype", 
+                      help="type of Flickr query", default=False)
+    parser.add_option("-x", "--debug", action="store_true", dest="debug", 
+                      help="debug script", default=False)
+    parser.add_option("-p", "--pf", action="store", dest="pf", 
+                      type="string", help="parameter file path")
+    (options, args) = parser.parse_args()
+
+    if options.verbose:
+        verbose = True
+    else:
+        verbose = False
+    if options.station_override:
+        station = options.station_override
+    else:
+        station = False
+    if options.qtype:
+        qtype = options.qtype
+    else:
+        qtype = False
+    if options.debug:
+        debug = options.debug
+    else:
+        debug = False
+    if not options.pf:
+        pfs_tuple = list(pffiles('db2flickrdownloadtoppick'))
+        for p in pfs_tuple:
+            if os.path.isfile(p):
+                pfname = p
+    else:
+        if not os.path.isfile(options.pf):
+            logfmt("Command line defined parameter file '%s' does not exist" % options.pf)
+        else:
+            pfname = options.pf
+
+    verbosity = 0
+    if verbose:
+        verbosity += 1
+    if debug:
+        verbosity += 2
+
+    return verbosity, station, qtype, pfname
+    # }}}
+
+def parse_pf(pfname):
+    """Parse parameter file
+    """
+    # {{{ parse_pf
+    parsed_pf = {}
+    parsed_pf['api_key'] = pfget(pfname, 'api_key')
+    parsed_pf['api_secret'] = pfget(pfname, 'api_secret')
+    parsed_pf['token'] = pfget(pfname, 'token')
+    parsed_pf['myid'] = pfget(pfname, 'myid')
+    parsed_pf['all_tags'] = pfget(pfname, 'all_tags')
+    parsed_pf['flickr_url_path'] = pfget(pfname, 'flickr_url_path')
+    parsed_pf['tester_tags'] = pfget(pfname, 'tester_tags')
+    parsed_pf['sendmail'] = pfget(pfname, 'sendmail')
+    parsed_pf['recipients'] = pfget(pfname, 'recipients')
+
+    # Get generalized config parameter file vars
+    common_pf = 'common.pf'
+    pfupdate(common_pf)
+    cache_json = pfget(common_pf, 'CACHEJSON')
+    parsed_pf['dbmaster'] = pfget(common_pf, 'USARRAY_DBMASTER')
+    parsed_pf['photo_path'] = pfget(common_pf, 'CACHE_TOP_PICK')
+    parsed_pf['json_file_path'] = '%s/stations/stations.json' % cache_json
+    parsed_pf['num_processes'] = int(multiprocessing.cpu_count()/3) # Be nice & only use a third of available processors
+    parsed_pf['then'] = time() - 604800 # Within the last week ago
+    return parsed_pf
+    # }}}
+
+def time_test(my_sta_dict, sta_type):
+    """Does the station 
+    (only AZ or TA right now)
+    pass the time test?
+    """
+    # {{{ time_test
+    if my_sta_dict['snet'] == 'TA' or my_sta_dict['snet'] == 'AZ':
+        try:
+            struct_time = strptime(my_sta_dict["decert_time"], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            print "   - Time %s cannot be converted to a struct_time" % my_sta_dict["decert_time"]
+        else:
+            if mktime(struct_time) > then:
+                return True
+    return False
+    # }}}
+
+def build_stalist(json_dict, params):
+    """Parse the JSON file dict and
+    return list of all stations in reverse
+    order for the pop() later
+    """
+    # {{{ build_stalist
+    qtype = params['qtype']
+    sta_list = []
+    if qtype == 'adopt' or qtype == 'decom':
+        for sta_name in json_dict[qtype]:
+            sta_list.append(sta_name)
+    else:
+        for sta_type in json_dict:
+            for sta_name in json_dict[sta_type]:
+                if json_dict[sta_type][sta_name]['snet'] == 'TA':
+                    if qtype == 'all':
+                        print " - Getting photos for ALL stations (decom, adopt and active)"
+                        sta_list.append(sta_name)
+                    else:
+                        if sta_type == 'adopt' or sta_type == 'decom':
+                            if time_test(json_dict[sta_type][sta_name], sta_type):
+                                sta_list.append(sta_name)
+                        else:
+                            sta_list.append(sta_name)
+    sta_list.sort(reverse=True)
+    return sta_list
+    # }}}
+
+def json_stalist(json_file, params):
+    """Get a list of stations
+    from the JSON file specified
+    """
+    # {{{ json_stalist
+    file_pointer = open(json_file,'r').read()
+    my_json_obj = json.loads(file_pointer)
+    json_sta_list = build_stalist(my_json_obj, params)
+    return json_sta_list
+    # }}}
+
+def per_sta_query(flickr, staname, params, conn=False):
+    """Create a subprocess
+    for the selected station
+    """
+    # {{{ per_sta_query
+    try:
+        retcode = flickr_photo_retrieval(flickr, staname, params)
+    except OSError:
+        retcode = " - Subprocess execution failed for station %s" % staname
+    conn.send(retcode)
+    conn.close()
+    # }}}
+
+def flickr_tag_precedence(flickr, tag, sta, params):
+    """Search photos tagged in Flickr
+    and return in order of precedence
+    """
+    # {{{ flickr_tag_precedence
+    result_tags = {}
+    for k,v in params['tester_tags'].iteritems():
+        tag1_suffix = v[0]
+        tag2_prefix = v[1]
+        final_tags = tag+tag1_suffix+', '+tag2_prefix+sta
+        try:
+            search = flickr.photos_search(user_id=params['myid'],
+                                          tags=final_tags,
+                                          tag_mode='all',
+                                          per_page='10')
+        except flickrapi.FlickrError, e:
+            logfmt("FlickrError: '%s'" % e)
+            raise TypeError("FlickrError: '%s'" % e)
+        except AttributeError, e:
+            logfmt("AttributeError: %s" % e)
+            raise TypeError("AttributeError: '%s'" % e)
+        except IOError, e:
+            logfmt("IOError: %s" % e)
+            raise TypeError("IOError: '%s'" % e)
+        else:
+            if len(search.find('photos')) > 0:
+                if params['verbosity'] > 1:
+                    logfmt(" + Search for photo tagged '%s%s, %s%s': MATCH" % (tag, tag1_suffix, tag2_prefix, sta))
+                result_tags[k] = (tag1_suffix, tag2_prefix)
+            else:
+                if params['verbosity'] > 1:
+                    logfmt(" - Search for photo tagged '%s%s, %s%s': FAILED" % (tag, tag1_suffix, tag2_prefix, sta))
+    # Precedence
+    if 'before' in result_tags:
+        return [ tag+result_tags['before'][0], result_tags['before'][1]+sta ]
+    elif 'after' in result_tags:
+        return [ tag+result_tags['after'][0], result_tags['after'][1]+sta ]
+    elif 'simple' in result_tags:
+        return [ tag+result_tags['simple'][0], result_tags['simple'][1]+sta ]
+    elif 'none' in result_tags:
+        return [ tag+result_tags['none'][0], result_tags['none'][1]+sta ]
+    else:
+        raise TypeError(' - No matching photos for any of the tag selections.')
+    # }}}
+
+def delete_local_flickr_img(img_path, img_id, params):
+    """Use glob to delete any pre-existing file for
+    this image that does not match the one about to
+    be downloaded
+    """
+    # {{{ delete_local_flickr_img
+    response_list = []
+    for entry in glob.glob(img_path):
+        if(entry.count(img_id) == 0 ):
+            response_list.append("  - Warning: Pre-existing file %s that is no longer valid. Deleting...\n" % entry)
+            try:
+                os.remove(entry)
+            except OSError, e:
+                response_list.append("  - Error: %s occurred when trying to delete the file %s\n" % (e.errno, entry))
+        else:
+            statinfo = os.stat(entry)
+            if( statinfo.st_size < 1 ):
+                response_list.append("  - Warning: Pre-existing file %s has a file size of zero! Deleting...\n" % entry)
+                try:
+                    os.remove(entry)
+                except OSError, e:
+                    response_list.append("  - Error: %s occurred when trying to delete the file %s\n" % (e.errno, entry))
+
+    if len(response_list) > 0 and params['verbosity'] > 0:
+        response_str = "".join(response_list)
+        return response_str
+    else:
+        return ""
+    # }}}
+
+def download_flickr_img(img_path, photo, params):
+    """Attempt to download the photo from
+    Flickr to a local file system
+    """
+    # {{{ download_flickr_img
+    response_list = []
+    if not os.path.exists(img_path):
+        my_file = flickr_url_path % (photo.attrib['farm'],
+                                     photo.attrib['server'],
+                                     photo.attrib['id'],
+                                     photo.attrib['secret'])
+
+        try:
+            downloaded = urllib2.urlopen(my_file).read()
+        except urllib2.URLError:
+            print urllib2.URLError
+        except:
+            response_list.append('  - Unknown saving error for %s\n' % my_file)
+        else:
+            save = open(img_path, 'wb')
+            savestr = str(downloaded)
+            save.write(savestr)
+            save.close()
+            response_list.append('  - Saving photo: %s\n' % my_file)
+    else:
+        response_list.append('  - Image %s already exists. Ignoring.\n' % img_path)
+
+    if len(response_list) > 0 and params['verbosity'] > 0:
+        response_str = ''.join(response_list)
+        return response_str
+    else:
+        return ""
+    # }}}
+
+def flickr_photo_retrieval(flickr, sta, params):
+    """Grab the matching photo
+    from Flickr
+    """
+    # {{{ flickr_photo_retrieval
+    query_output = []
+    photo_obj = {}
+    for i in range(len(params['all_tags'])):
+        try:
+            the_auth_tag, the_sta_tag = flickr_tag_precedence(flickr, params['all_tags'][i], sta, params)
+        except TypeError as e:
+            logfmt(' - No photo for %s: %s. Error: %s' % (sta, params['all_tags'][i], e))
+            query_output.append('  - No photo for %s: %s\n' % (sta, params['all_tags'][i]))
+        else:
+            if params['verbosity']:
+                logfmt(" - Using tags '%s, %s'" % (the_auth_tag, the_sta_tag))
+            mytags = "%s, %s" % (the_sta_tag, the_auth_tag)
+            try:
+                search = flickr.photos_search(user_id=params['myid'],
+                                              tags=mytags,
+                                              tag_mode='all',
+                                              per_page='10')
+            except flickrapi.FlickrError, e:
+                logfmt("FlickrError: '%s'" % e)
+            except AttributeError, e:
+                logfmt("AttributeError: %s" % e)
+            except TypeError, e:
+                logfmt("TypeError: %s" % e)
+            except IOError, e:
+                logfmt("IOError: %s" % e)
+            else:
+                if len(search.find('photos').findall('photo')) > 1:
+                    logfmt("  - Warning: %d different photos match the tag query %s. This will cause duplication errors. Please fix." % (len(search.photos), mytags))
+                # Grab all matching photos
+                try:
+                    photo = search.find('photos').findall('photo')[0]
+                except AttributeError, e:
+                    logfmt("Attribute Error: %s" % e)
+                except TypeError, e:
+                    logfmt("  - TypeError: %s" % e)
+                except IOError, e:
+                    logfmt("IOError: %s" % e)
+                else:
+                    img = '%s/%s_%s_%s.jpg' % (params['photo_path'], sta, params['all_tags'][i], photo.attrib['id'])
+                    greedy_file_search = '%s/%s*_%s_*.jpg' % (params['photo_path'], sta, params['all_tags'][i])
+                    query_output.append(delete_local_flickr_img(greedy_file_search, photo.attrib['id'], params))
+                    query_output.append(download_flickr_img(img, photo, params))
+
+    if len(query_output) > 0 and params['verbosity'] > 0:
+        query_str = ''.join(query_output)
+        return '%s\n' % query_str
+    else:
+        return "Complete...\n"
+    # }}}
+
+def logfmt(message, output=False):
+    """"Output a log
+    message with a 
+    timestamp"""
+    # {{{ logfmt
+    curtime = strtime(time())
+    if output == 's':
+        return '%s %s\n' % (curtime, message)
+    else:
+        print curtime, message
+    # }}}
+
+def main():
+    """Grab & parse station list
+    then run subprocesses to 
+    grab photos from Flickr
+    """
+    # {{{ main
+    verbosity, station, qtype, pfname = configure()
+
+    params = parse_pf(pfname)
+
+    params['verbosity'] = verbosity
+    params['qtype'] = qtype
+
+    # pprint(params)
+
+    flickr = flickrapi.FlickrAPI(params['api_key'], 
+                                 params['api_secret'], 
+                                 token=params['token'])
+
+    if verbosity > 1:
+        logfmt('*** DEBUGGING MODE')
+        recipients = [params['recipients'][0]]
+    else:
+        recipients = params['recipients']
+
+    if station:
+        file_sta_list = [station]
+    else:
+        file_sta_list = json_stalist(json_file_path, params)
+
+    threads = []
+
+    if verbosity > 0:
+        logfmt('Flickr Python Photo Downloader started')
+        logfmt('Checking TA stations...')
+        logfmt('Email will be sent to: %s' % ', '.join(list(recipients)))
+        logfmt('Number of processes: %s' % params['num_processes'])
+        logfmt('Number of stations to process: %s' % len(file_sta_list))
+
+    out_str = logfmt('Flickr Python Photo Downloader started', 's')
+    out_str += logfmt('Checking TA stations...', 's')
+
+    while threads or file_sta_list:
+        if (len(threads) < num_processes) and file_sta_list:
+            mysta = file_sta_list.pop()
+            if verbosity > 0:
+                logfmt('- Station %s' % mysta)
+            out_str += logfmt('- Station %s\n' % mysta, 's')
+            parent_conn, child_con = multiprocessing.Pipe()
+            p = multiprocessing.Process(target=per_sta_query, args=[flickr, mysta, params, child_con])
+            p.start()
+            threads.append(p)
+            try:
+                ret_vals = parent_conn.recv()
+                out_str += ret_vals
+                p.join()
+            except TypeError as type_err:
+                out_str += logfmt("- Station %s: Connection recv() type error: %s\n" % (mysta, type_err), 's')
+        else:
+            for thread in threads:
+                if not thread.is_alive():
+                    threads.remove(thread)
+
+    if verbosity > 0:
+        logfmt(' - All TA stations checked...')
+        logfmt('- Flickr Python Photo Downloader finished')
+
+    out_str += logfmt('All TA stations checked. Goodbye..', 's')
+    out_str += logfmt('Flickr Python Photo Downloader finished', 's')
+
+    # Sendmail command
+    # sm = os.popen("%s -t" % params['sendmail'], 'w' ) 
+    # sm.write("To: %s\n" % ','.join(list(recipients)))
+    # sm.write("Subject: Flickr photo archive retrieval output\n")
+    # sm.write(out_str)
+    # exitcode = sm.close()
+
+    # if exitcode:
+    #     print "Exit code: %s" % exitcode
+
+    msg_from = 'Real-Time Manager <rt@anfwebproc.ucsd.edu>'
+    msg_to = ','.join(list(recipients))
+
+    msg = MIMEText(out_str)
+    msg['Subject'] = 'Flickr photo archive retrieval output'
+    msg['From'] = msg_from
+    msg['To'] = msg_to
+
+    sm = smtplib.SMTP('localhost')
+    sm.sendmail(msg_from, [msg_to],  msg.as_string())
+    sm.quit()
+
+    return 0
+    # }}}
+
+if __name__ == '__main__':
+    status = main()
+    sys.exit(status)

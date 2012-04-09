@@ -1,0 +1,40 @@
+# Config file for the db2flickrdownloadtoppick process
+
+api_key    *****
+api_secret *****
+token      *****
+myid       *****
+all_tags   &Tbl{
+    top_pick
+    LN
+    LW
+    LE
+    LS
+}
+flickr_url_path    http://farm%s.static.flickr.com/%s/%s_%s.jpg
+tester_tags    &Arr{
+    before    &Tbl{
+        _before
+        TA_
+    }
+    after    &Tbl{
+        _after
+        TA_
+    }
+    simple    &Tbl{
+        
+        TA_
+    }
+    none    &Tbl{
+        
+        
+    }
+}
+
+recipients    &Tbl{
+    rob@test.com
+    hafner@test.com
+    reyes@test.com
+}
+
+pf_revision_time    1333992076
