@@ -13,6 +13,7 @@ Antelope as of 5.2-64). Python 2.6 and up.
 If you have any questions about this repository, give me a holler on GitHub.
 
 # More information
-More information on BRTT: http://www.brtt.com
-The official Antelope Contributed code repository: http://github.com/antelopeusersgroup/antelope_contrib
-More information on me: http://www.robertnewmanconsulting.com
+
+* More information on BRTT: http://www.brtt.com
+* The official Antelope Contributed code repository: http://github.com/antelopeusersgroup/antelope_contrib
+* More information on me: http://www.robertnewmanconsulting.com
