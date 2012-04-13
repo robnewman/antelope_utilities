@@ -1,0 +1,206 @@
+#!/usr/bin/env python
+
+"""
+Antelope Datascope output to JSON files
+Network performance metrics
+
+
+@package  Datascope
+@author   Rob Newman <robertlnewman@gmail.com> 858.822.1333
+@version  1.0
+@license  MIT style license
+@modified 2012-04-13
+"""
+
+import sys
+import os
+import json
+from time import time
+from optparse import OptionParser
+
+from pprint import pprint
+
+# For Antelope
+sys.path.append( os.environ['ANTELOPE'] + '/local/data/python/antelope' )
+import datascope
+from stock import pfget, strtime
+
+import pythondbcentral as dbcentral
+
+from collections import defaultdict
+
+def configure():
+    """Parse command line arguments
+    """
+    # {{{ configure
+    usage = "Usage: %prog [options]"
+    parser = OptionParser(usage=usage)
+    parser.add_option("-v", "--verbose", action="store_true", dest="verbose", 
+                      help="verbose output", default=False)
+    parser.add_option("-n", "--network", action="store", dest="network_override", 
+                      help="network override", default=False)
+    parser.add_option("-x", "--debug", action="store_true", dest="debug", 
+                      help="debug script", default=False)
+    (options, args) = parser.parse_args()
+
+    if options.verbose:
+        verbose = True
+    else:
+        verbose = False
+    if options.network_override:
+        snets = options.network_override
+    else:
+        snets = False
+    if options.debug:
+        debug = options.debug
+    else:
+        debug = False
+
+    verbosity = 0
+    if verbose:
+        verbosity += 1
+    if debug:
+        verbosity += 2
+
+    return verbosity, snets
+    # }}}
+
+def parse_pf():
+    """Parse parameter file
+    """
+    # {{{ parse_pf
+    common = 'common.pf'
+    stations = 'stations.pf'
+    parsed_pf = {}
+
+    parsed_pf['pf_snets'] = pfget(stations, 'network')
+    parsed_pf['pf_colors'] = pfget(stations, 'colors')
+
+    parsed_pf['dbcentral'] = pfget(common, 'DBCENTRAL')
+    parsed_pf['jsonpath'] = pfget(common, 'CACHEJSON')
+
+    return parsed_pf
+    # }}}
+
+def logfmt(message, output=False):
+    """"Output a log
+    message with a 
+    timestamp"""
+    # {{{ logfmt
+    curtime = strtime(time())
+    if output == 's':
+        return '%s %s\n' % (curtime, message)
+    else:
+        print curtime, message
+    # }}}
+
+def getsnets(dblist):
+    """Determine all
+    the networks returning
+    data"""
+    # {{{ getsnets
+    snets_all = []
+    for i, dbpath in enumerate(dblist):
+        perf_ptr = datascope.dbopen(dbpath, 'r')
+        perf_ptr.lookup(table='netperf')
+        perf_ptr.sort('snet', unique=True)
+        for j in range(perf_ptr.query('dbRECORD_COUNT')):
+            perf_ptr[3] = j
+            snets_all.append(perf_ptr.getv('snet')[0])
+    perf_ptr.free()
+    perf_ptr.close()
+    snets = sorted(list(set(snets_all)))
+    return snets
+    # }}}
+
+def getperformance(dblist, snets):
+    """Get the performance
+    metrics for the networks
+    """
+    # {{{ getperformance
+    performance = defaultdict(dict)
+    for i, dbpath in enumerate(dblist):
+        sperf = datascope.dbopen(dbpath, 'r')
+        sperf.lookup(table='netperf')
+        for s in snets:
+            try:
+                mysnet = datascope.dbsubset(sperf, 'snet=~/%s/' % s)
+            except ValueError,e:
+                print "%s:%s" % (mysnet, e)
+            else:
+                for mys in range(mysnet.query('dbRECORD_COUNT')):
+                    mysnet[3] = mys
+                    snet, time, npsta, perf = mysnet.getv('snet', 'time', 'npsta', 'perf')
+                    performance[s][int(time)] = perf
+            mysnet.free()
+        sperf.free()
+    return performance
+    # }}}
+
+def dumpjson(mydict, jsonfile):
+    """Dump dictionary to
+    json"""
+    # {{{ dumpjson
+    f = open(jsonfile+'+', 'w')
+    try:
+        json.dump(mydict, f, sort_keys=True, indent=2)
+    except Exception, e:
+        logfmt("JSON dump() error")
+    else:
+        f.flush()
+
+    try:
+        os.rename(jsonfile+'+', jsonfile)
+    except OSError,e:
+        logfmt("Error: Renaming JSON file (%s) failed: %s-%s" % (jsonfile, OSError, e))
+    # }}}
+
+def main():
+    """ Main functionality
+    """
+    # {{{ main
+    verbosity, snet = configure()
+    pfvars = parse_pf()
+
+    if verbosity > 0: logfmt("Determine dbpaths using dbcentral")
+
+    if verbosity > 0: logfmt("For 'usarray_perf'")
+
+    dbc_rt = dbcentral.DbCentral(pfvars['dbcentral'],
+                                 'usarray_perf')
+    db_rt_perf_path = dbc_rt.namelist()
+
+    if verbosity > 0: logfmt("For 'usarray_perf_archive'")
+
+    dbc_archive = dbcentral.DbCentral(pfvars['dbcentral'],
+                                      'usarray_perf_archive')
+    db_perf_paths = dbc_archive.namelist()
+    db_perf_paths.append(db_rt_perf_path)
+
+    if verbosity > 0: logfmt("Get all snets")
+
+    snets = getsnets(db_perf_paths)
+
+    if verbosity > 0: logfmt("Get performance metrics")
+
+    performance = getperformance(db_perf_paths, snets)
+
+    json_dir = '%s/tools/data_return_rates' % pfvars['jsonpath']
+    json_file = '%s/usarray.json' % json_dir
+
+    if verbosity > 0:
+        logfmt("Dump JSON to file '%s'" % json_file)
+    dumpjson(performance, json_file)
+
+    for s in snets:
+        json_file = '%s/%s.json' % (json_dir, s)
+        if verbosity > 0:
+            logfmt("Dump JSON to file '%s'" % json_file)
+        dumpjson(performance[s], json_file)
+
+    return 0
+    # }}}
+
+if __name__ == '__main__':
+    status = main()
+    sys.exit(status)
