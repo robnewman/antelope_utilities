@@ -287,7 +287,7 @@ def download_flickr_img(img_path, photo, params):
     # {{{ download_flickr_img
     response_list = []
     if not os.path.exists(img_path):
-        my_file = flickr_url_path % (photo.attrib['farm'],
+        my_file = params['flickr_url_path'] % (photo.attrib['farm'],
                                      photo.attrib['server'],
                                      photo.attrib['id'],
                                      photo.attrib['secret'])
@@ -351,6 +351,8 @@ def flickr_photo_retrieval(flickr, sta, params):
                 # Grab all matching photos
                 try:
                     photo = search.find('photos').findall('photo')[0]
+                except IndexError, e:
+                    logfmt("Index Error: %s" % e)
                 except AttributeError, e:
                     logfmt("Attribute Error: %s" % e)
                 except TypeError, e:
@@ -471,7 +473,7 @@ def main():
     msg['To'] = msg_to
 
     sm = smtplib.SMTP('localhost')
-    sm.sendmail(msg_from, [msg_to],  msg.as_string())
+    sm.sendmail(msg_from, recipients,  msg.as_string())
     sm.quit()
 
     return 0
