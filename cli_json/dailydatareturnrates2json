@@ -23,7 +23,7 @@ from pprint import pprint
 # For Antelope
 sys.path.append( os.environ['ANTELOPE'] + '/local/data/python/antelope' )
 import datascope
-from stock import pfget, strtime
+from stock import pfget, strtime, epoch2str
 
 import pythondbcentral as dbcentral
 
@@ -78,6 +78,7 @@ def parse_pf():
 
     parsed_pf['dbcentral'] = pfget(common, 'DBCENTRAL')
     parsed_pf['jsonpath'] = pfget(common, 'CACHEJSON')
+    parsed_pf['webroot'] = pfget(common, 'WEBROOT')
 
     return parsed_pf
     # }}}
@@ -92,6 +93,16 @@ def logfmt(message, output=False):
         return '%s %s\n' % (curtime, message)
     else:
         print curtime, message
+    # }}}
+
+def getmetadata():
+    """Return metadata
+    """
+    # {{{ getmetadata
+    metadata = {}
+    metadata['modification_time'] = int(time())
+    metadata['modification_time_readable'] = epoch2str(int(time()), "%H:%M UTC %A %B %o, %Y")
+    return metadata
     # }}}
 
 def getsnets(dblist):
@@ -113,28 +124,88 @@ def getsnets(dblist):
     return snets
     # }}}
 
-def getperformance(dblist, snets):
+def getperformance(dblist, snets, verbosity=False):
     """Get the performance
     metrics for the networks
     """
     # {{{ getperformance
-    performance = defaultdict(dict)
+    final_performance = defaultdict(dict)
+    performance = defaultdict(list)
+    if verbosity > 0: logfmt(" - Iterate over databases")
     for i, dbpath in enumerate(dblist):
         sperf = datascope.dbopen(dbpath, 'r')
         sperf.lookup(table='netperf')
+        sperf.sort('time')
         for s in snets:
+            if verbosity > 0: logfmt("  - Working on performance for %s (%s)" % (s, dbpath))
             try:
                 mysnet = datascope.dbsubset(sperf, 'snet=~/%s/' % s)
             except ValueError,e:
                 print "%s:%s" % (mysnet, e)
             else:
+                data_list = []
                 for mys in range(mysnet.query('dbRECORD_COUNT')):
                     mysnet[3] = mys
                     snet, time, npsta, perf = mysnet.getv('snet', 'time', 'npsta', 'perf')
-                    performance[s][int(time)] = perf
+                    data_list.append({'time':time, 'value':perf})
+                performance[s].append(data_list)
             mysnet.free()
         sperf.free()
-    return performance
+
+    for s in performance:
+        if verbosity > 0: logfmt(" - Concatenate performance lists for %s to generate final performance metrics" % s)
+        final_list = []
+        for mylist in performance[s]:
+            final_list += mylist
+        final_performance[s] = final_list
+
+    return final_performance
+    # }}}
+
+def calcstats(performance_data, verbosity=False):
+    """Calculate some stats
+    from the performance data
+    """
+    # {{{ calcstats
+    if verbosity > 0: logfmt("Calculate statistics")
+    stats = {
+        'average': 0,
+        'median':0,
+        'all_days':0,
+        'perfect_days':0,
+        'longest_perfect_period':0
+    }
+    just_the_data = [i['value'] for i in performance_data]
+    if verbosity > 0: logfmt(" - Length of data: %s" % len(just_the_data))
+    stats['average'] = float(sum(just_the_data))/len(just_the_data)
+
+    if len(just_the_data) % 2 == 0:
+        median = []
+        median.append(sorted(just_the_data)[len(just_the_data)/2])
+        median.append(sorted(just_the_data)[len(just_the_data)/2 + 1])
+        stats['median'] = float(sum(median))/len(median)
+    else:
+        stats['median'] = sorted(just_the_data)[len(just_the_data)/2]
+
+    longest_perfect = []
+    one_hundred = 0
+
+    for i in performance_data:
+        if i['value'] == 100:
+            one_hundred += 1
+        else:
+            longest_perfect.append(one_hundred)
+            one_hundred = 0
+
+    # Possible to get 100% days for whole period
+    if len(longest_perfect) == 0:
+        stats['longest_perfect_period'] = one_hundred
+    else:
+        stats['longest_perfect_period'] = max(longest_perfect)
+
+    stats['perfect_days'] = just_the_data.count(100)
+    stats['all_days'] = len(just_the_data)
+    return stats
     # }}}
 
 def dumpjson(mydict, jsonfile):
@@ -183,20 +254,26 @@ def main():
 
     if verbosity > 0: logfmt("Get performance metrics")
 
-    performance = getperformance(db_perf_paths, snets)
+    performance = getperformance(db_perf_paths, snets, verbosity)
+    metadata = getmetadata()
 
     json_dir = '%s/tools/data_return_rates' % pfvars['jsonpath']
-    json_file = '%s/usarray.json' % json_dir
 
-    if verbosity > 0:
-        logfmt("Dump JSON to file '%s'" % json_file)
-    dumpjson(performance, json_file)
-
+    files = {}
     for s in snets:
+        per_snet_stats = calcstats(performance[s], verbosity)
+        this_snet_json = {'data':performance[s], 'stats':per_snet_stats}
         json_file = '%s/%s.json' % (json_dir, s)
+        files[s] = json_file.replace(pfvars['webroot'], '')
         if verbosity > 0:
             logfmt("Dump JSON to file '%s'" % json_file)
-        dumpjson(performance[s], json_file)
+        dumpjson(this_snet_json, json_file)
+
+    json_obj = {'metadata':metadata, 'files':files}
+    json_file = '%s/usarray.json' % json_dir
+    if verbosity > 0:
+        logfmt("Dump JSON to file '%s'" % json_file)
+    dumpjson(json_obj, json_file)
 
     return 0
     # }}}
