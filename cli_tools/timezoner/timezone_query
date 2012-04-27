@@ -1,0 +1,209 @@
+#!/usr/bin/env python
+
+"""
+Antelope Datascope Tool
+Returns events from a db and uses the AskGeo
+webservice to determine the time
+zone of the event based on the event
+lat-lon.
+
+Typical response from the AskGeo service:
+
+{
+    "code":0,
+    "message":"ok",
+    "data":[
+        {"TimeZone":{
+            "AskGeoId":3166,
+            "IsInside":true,
+            "MinDistanceKm":0.0,
+            "CurrentOffsetMs":-18000000,
+            "ShortName":"CDT",
+            "WindowsStandardName":"Central Standard Time",
+            "InDstNow":true,
+            "TimeZoneId":"America/Chicago"
+            }
+        }
+    ]
+}
+
+Creates a dictionary of events with
+local times (including time zone and
+short name) added to the dictionary.
+
+Writes out the dictionary to a file
+
+@package  Datascope
+@author   Rob Newman <robertlnewman@gmail.com> 858.822.1333
+@version  1.0
+@license  MIT style license
+@modified 2012-04-27
+"""
+
+import sys
+import os
+from time import time
+from optparse import OptionParser
+import urllib2
+import json
+
+from pprint import pprint
+
+# For Antelope
+sys.path.append( os.environ['ANTELOPE'] + '/data/python/antelope' )
+import datascope
+from stock import pfget, strtime, epoch2str, str2epoch
+
+from collections import defaultdict
+
+# GLOBALS
+APP_ID  = '##'
+API_KEY = '########################'
+SERVICE = 'http://api.askgeo.com/v1/'
+
+def configure():
+    """Parse command line arguments
+    """
+    # {{{ configure
+    usage = "Usage: %prog [options] dbpath outfile"
+    parser = OptionParser(usage=usage)
+    parser.add_option("-v", "--verbose", action="store_true", dest="verbose", 
+                      help="verbose output", default=False)
+    parser.add_option("-x", "--debug", action="store_true", dest="debug", 
+                      help="debug script", default=False)
+    (options, args) = parser.parse_args()
+
+    if options.verbose:
+        verbose = True
+    else:
+        verbose = False
+
+    if options.debug:
+        debug = options.debug
+    else:
+        debug = False
+
+    if os.path.isfile(args[0]):
+        db = args[0]
+    else:
+        logfmt("File '%s' does not exist. Exiting." % args[0])
+        sys.exit()
+
+    outfile = args[1]
+
+    verbosity = 0
+    if verbose:
+        verbosity += 1
+    if debug:
+        verbosity += 2
+
+    return verbosity, db, outfile
+    # }}}
+
+def logfmt(message, output=False):
+    """"Output a log
+    message with a 
+    timestamp"""
+    # {{{ logfmt
+    curtime = strtime(time())
+    if output == 's':
+        return '%s %s\n' % (curtime, message)
+    else:
+        print curtime, message
+    # }}}
+
+def main():
+    """ Main functionality
+    """
+    # {{{ main
+    verbosity, db, outfile = configure()
+
+    if verbosity > 0: logfmt("Open up db '%s'" % db)
+    dbptr = datascope.dbopen(db, 'r')
+    if verbosity > 0: logfmt("Lookup origin")
+    dbptr_o = datascope.dblookup(dbptr, '', 'origin', '', '')
+    if verbosity > 0: logfmt("Join origerr")
+    dbptr_oe = datascope.dbjoin(dbptr_o, 'origerr')
+    if verbosity > 0: logfmt("Outer join netmag")
+    dbptr_oen = datascope.dbjoin(dbptr_oe, 'netmag', outer=True)
+
+    fields = ('time',
+              'lat',
+              'lon',
+              'depth',
+              'sdobs',
+              'ndef',
+              'ms',
+              'mb',
+              'ml',
+              'magnitude',
+              'uncertainty',
+              'nsta',
+              'magtype',
+              'netmag.auth',
+              'origin.auth')
+
+    results = defaultdict(dict)
+
+    if verbosity > 0: logfmt("Loop over records")
+    for i in range(datascope.dbquery(dbptr_oen, 'dbRECORD_COUNT')):
+        dbptr_oen[3] = i
+        record = []
+        for f in fields:
+            results[i][f] = datascope.dbgetv(dbptr_oen, f)[0]
+
+    if verbosity > 0: logfmt("Add timezone and local time string conversion")
+
+    for i in sorted(results.iterkeys()):
+
+        url = "%s/%s/%s/query.json?points=%s,%s&databases=TimeZone" % (SERVICE, APP_ID, API_KEY, results[i]['lat'], results[i]['lon'])
+
+        time_str = epoch2str(results[i]['time'], "%Y-%m-%d %H:%M:%S")
+
+        try:
+            json_page = urllib2.Request(url)
+        except urllib2.URLError:
+            logfmt(urllib2.URLError)
+        except:
+            logfmt("Unknown urllib2 error for url '%s'" % url)
+        else:
+            clean_json   = json.load(urllib2.urlopen(json_page))
+            time_zone    = clean_json['data'][0]['TimeZone']['TimeZoneId']
+            win_standard = clean_json['data'][0]['TimeZone']['WindowsStandardName']
+            short_name   = clean_json['data'][0]['TimeZone']['ShortName']
+
+            local_time_str = epoch2str(results[i]['time'], "%Y-%m-%d %H:%M:%S", tz='%s' % short_name)
+            local_time = str2epoch(local_time_str) 
+            print "Lat: %s, Lon: %s, Time: %s (%s), Local Time: %s (%s), Time Zone: %s" % (results[i]['lat'], results[i]['lon'], results[i]['time'], time_str, local_time, local_time_str, short_name)
+
+            results[i]['local_time'] = local_time
+            results[i]['local_time_str'] = local_time_str
+            results[i]['time_str'] = time_str
+            results[i]['time_zone'] = time_zone
+            results[i]['short_name'] = short_name
+
+    logfmt("Attempt to write out results to file '%s'" % outfile)
+
+    myfile = open(outfile, 'w')
+
+    try:
+        for i in sorted(results.iterkeys()):
+            this_record = "%s " % results[i]['local_time']
+            for f in fields:
+                this_record += "%s " % results[i][f]
+            this_record += "%s %s" % (results[i]['time_zone'],
+                                      results[i]['short_name'])
+            myfile.writelines(this_record+'\n')
+    except OSError,e:
+        logfmt("OSError: %e" % e)
+    except IOError,e:
+        logfmt("IOError: %e" % e)
+    else:
+        myfile.close()
+        logfmt("Successfully wrote results to file '%s'" % outfile)
+    return 0
+    # }}}
+
+if __name__ == '__main__':
+    status = main()
+    sys.exit(status)
