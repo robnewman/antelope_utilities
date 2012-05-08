@@ -171,15 +171,25 @@ def main():
             time_zone    = clean_json['data'][0]['TimeZone']['TimeZoneId']
             win_standard = clean_json['data'][0]['TimeZone']['WindowsStandardName']
             short_name   = clean_json['data'][0]['TimeZone']['ShortName']
+            id           = clean_json['data'][0]['TimeZone']['TimeZoneId']
 
-            local_time_str = epoch2str(results[i]['time'], "%Y-%m-%d %H:%M:%S", tz='%s' % short_name)
+            local_time_str = epoch2str(results[i]['time'],
+                                       "%Y-%m-%d %H:%M:%S",
+                                       tz='%s' % id)
+            pacific_time_str = epoch2str(results[i]['time'],
+                                       "%Y-%m-%d %H:%M:%S",
+                                       tz='America/Los_Angeles')
             local_time = str2epoch(local_time_str) 
-            print "Lat: %s, Lon: %s, Time: %s (%s), Local Time: %s (%s), Time Zone: %s" % (results[i]['lat'], results[i]['lon'], results[i]['time'], time_str, local_time, local_time_str, short_name)
+
+            if verbosity > 0:
+                print "Lat: %s, Lon: %s, Time: %s (%s), Local Time: %s (%s), Time Zone: %s" % (results[i]['lat'], results[i]['lon'], results[i]['time'], time_str, local_time, local_time_str, short_name)
 
             results[i]['local_time'] = local_time
             results[i]['local_time_str'] = local_time_str
+            results[i]['pacific_time_str'] = pacific_time_str
             results[i]['time_str'] = time_str
             results[i]['time_zone'] = time_zone
+            results[i]['time_zone_id'] = id
             results[i]['short_name'] = short_name
 
     logfmt("Attempt to write out results to file '%s'" % outfile)
@@ -191,8 +201,11 @@ def main():
             this_record = "%s " % results[i]['local_time']
             for f in fields:
                 this_record += "%s " % results[i][f]
-            this_record += "%s %s" % (results[i]['time_zone'],
-                                      results[i]['short_name'])
+            this_record += "%s %s %s %s %s" % (results[i]['time_zone'],
+                                      results[i]['short_name'],
+                                      results[i]['time_zone_id'],
+                                      results[i]['local_time_str'],
+                                      results[i]['pacific_time_str'])
             myfile.writelines(this_record+'\n')
     except OSError,e:
         logfmt("OSError: %e" % e)
