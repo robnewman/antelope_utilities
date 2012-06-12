@@ -1,40 +1,146 @@
 #!/usr/bin/env python
 
+'''
+Note that you must not have /opt/antelope/5.2-64/setup.sh
+sourced. We need the non-Antelope Python (which has the
+rrdtool library installed for it only)
+'''
+
 import os
 import sys
-import argparse
-import rrdtool
+from optparse import OptionParser
+import subprocess
+import time
 
-# in_dir = '/anf/web/vhosts/anf.ucsd.edu/projects/chile/rrd/rrd'
-# out_dir = '/anf/web/vhosts/anf.ucsd.edu/projects/chile/rrd_linux/rrd'
+from pprint import pprint
 
-tmp_dir = '/var/tmp'
+tmp_dir = '/var/tmp/rrddump'
+xml_suffix = '.xml'
+rrd_suffix = '.rrd'
 
 def configure():
     """Parse command line arguments
     """
     # {{{ configure
-    parser = argparse.ArgumentParser(description='Convert the RRDs')
-    parser.add_argument('-v', '--verbose', action='store_true',
-                        help='Output verbose logging')
-    parser.add_argument('indir', action='store',
-                        help='The input directory')
-    parser.add_argument('outdir', action='store',
-                        help='The output directory')
-    args = parser.parse_args()
-    return args.indir, args.outdir, args.verbose
+    usage = "Usage: %prog [options] directory_path"
+    parser = OptionParser(usage=usage)
+    parser.add_option("-v", "--verbose",
+                      action="store_true", dest="verbose",
+                      help="verbose output", default=False)
+    parser.add_option("-t", "--type",
+                      action="store", dest="type",
+                      help="type of conversion (dump or import)", default=False)
+    parser.add_option("-s", "--starttime",
+                      action="store", dest="starttime",
+                      help="start time epoch", default=False)
+    parser.add_option("-e", "--endtime",
+                      action="store", dest="endtime",
+                      help="end time epoch", default=False)
+    (options, args) = parser.parse_args()
+
+    if options.verbose:
+        verbose = True
+    else:
+        verbose = False
+
+    if options.type:
+        contype = options.type
+    else:
+        print "You must define a type of conversion (dump or import)"
+
+    if options.starttime:
+        starttime = options.starttime
+    else:
+        starttime = False
+
+    if options.endtime:
+        endtime = options.endtime
+    else:
+        endtime = False
+
+    if args[0]:
+        target_dir = args[0]
+
+    return target_dir, contype, starttime, endtime, verbose
     # }}}
+
+def logger(msg):
+    """Log messages"""
+    print "%s: %s" % (time.strftime('%Y-%m-%d (%j) %H:%M:%S', time.localtime()), msg)
 
 def main():
     """Main conversion"""
+    # {{{ main
+    target_dir, contype, starttime, endtime, verbosity = configure()
 
-    in_dir, out_dir, verbosity = configure()
+    if contype == 'dump':
+        rrddumper(target_dir, starttime, endtime, verbosity)
+    elif contype == 'import':
+        rrdrestorer(target_dir, verbosity)
 
-    dir_list = os.listdir(in_dir)
-    for fname in dir_list:
-        if '.rrd' in fname:
-            print fname
     return 0
+    # }}}
+
+def rrddumper(target_dir, starttime=False, endtime=False, verbosity=False):
+    # {{{ rrddumper
+    if starttime and endtime:
+
+        logger("Cannot define both a starttime and endtime")
+        return
+
+    else:
+
+        if verbosity:
+            logger("Directory_path = '%s'" % target_dir)
+            if starttime:
+                logger("You have defined a starttime parameter (%s) to use" % starttime)
+            elif endtime:
+                logger("You have defined a endtime parameter (%s) to use" % endtime)
+
+        dir_list = os.listdir(target_dir)
+
+        for fname in dir_list:
+
+            if '.rrd' in fname:
+
+                try:
+                    rrd_source, rrd_suffix = fname.split('.')
+                except ValueError, e:
+                    logger("ValueError: Error with fname '%s': %s" % (fname, e))
+                else:
+                    full_path_source = '%s/%s' % (target_dir, fname)
+                    target_xml = '%s/%s%s' % (tmp_dir, rrd_source, xml_suffix)
+
+                    if starttime or endtime:
+                        stat = os.stat(full_path_source)
+                        if starttime:
+                            if int(stat.st_mtime) >= int(starttime):
+                                if verbosity:
+                                    logger("Source: %s (last modified: %s), Target: %s" % (full_path_source, time.ctime(stat.st_mtime), target_xml))
+                                subprocess.call(['rrdtool', 'dump', full_path_source, target_xml])
+                        elif endtime:
+                            if int(stat.st_mtime) < int(endtime):
+                                if verbosity:
+                                    logger("Source: %s (last modified: %s), Target: %s" % (full_path_source, time.ctime(stat.st_mtime), target_xml))
+                                subprocess.call(['rrdtool', 'dump', full_path_source, target_xml])
+                    else:
+                        if verbosity:
+                            logger("Target: %s" % target_xml)
+                        subprocess.call(['rrdtool', 'dump', full_path_source, target_xml])
+    # }}}
+
+def rrdrestorer(target_dir, verbosity=False):
+    # {{{ rrdrestorer
+    dir_list = os.listdir(tmp_dir)
+    for fname in dir_list:
+        if '.xml' in fname:
+            xml_source, xml_suffix = fname.split('.')
+            full_path_xml = '%s/%s' % (tmp_dir, fname)
+            target_rrd = '%s/%s%s' % (target_dir, xml_source, rrd_suffix)
+            if verbosity:
+                logger("%s => %s" % (full_path_xml, target_rrd))
+            subprocess.call(['rrdtool', 'restore', full_path_xml, target_rrd])
+    # }}}
 
 if __name__ == '__main__':
     status = main()
