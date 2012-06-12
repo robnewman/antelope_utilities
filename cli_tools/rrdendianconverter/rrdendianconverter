@@ -1,0 +1,41 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import argparse
+import rrdtool
+
+# in_dir = '/anf/web/vhosts/anf.ucsd.edu/projects/chile/rrd/rrd'
+# out_dir = '/anf/web/vhosts/anf.ucsd.edu/projects/chile/rrd_linux/rrd'
+
+tmp_dir = '/var/tmp'
+
+def configure():
+    """Parse command line arguments
+    """
+    # {{{ configure
+    parser = argparse.ArgumentParser(description='Convert the RRDs')
+    parser.add_argument('-v', '--verbose', action='store_true',
+                        help='Output verbose logging')
+    parser.add_argument('indir', action='store',
+                        help='The input directory')
+    parser.add_argument('outdir', action='store',
+                        help='The output directory')
+    args = parser.parse_args()
+    return args.indir, args.outdir, args.verbose
+    # }}}
+
+def main():
+    """Main conversion"""
+
+    in_dir, out_dir, verbosity = configure()
+
+    dir_list = os.listdir(in_dir)
+    for fname in dir_list:
+        if '.rrd' in fname:
+            print fname
+    return 0
+
+if __name__ == '__main__':
+    status = main()
+    sys.exit(status)
