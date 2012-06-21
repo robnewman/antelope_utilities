@@ -9,12 +9,13 @@ rrdtool library installed for it only)
 import os
 import sys
 from optparse import OptionParser
+import multiprocessing
 import subprocess
 import time
 
 from pprint import pprint
 
-tmp_dir = '/var/tmp/rrddump'
+tmp_dir = '/anf/web/vhosts/anf.ucsd.edu/dbs/rrd_xml_dump_solaris'
 xml_suffix = '.xml'
 rrd_suffix = '.rrd'
 
@@ -66,7 +67,16 @@ def configure():
 
 def logger(msg):
     """Log messages"""
+    # {{{
     print "%s: %s" % (time.strftime('%Y-%m-%d (%j) %H:%M:%S', time.localtime()), msg)
+    # }}}
+
+def multiprocess_looper(source, target):
+    """Use multiprocesser lib
+    to speed it up"""
+    # {{{
+    return subprocess.call(['rrdtool', 'dump', source, target])
+    # }}}
 
 def main():
     """Main conversion"""
@@ -82,6 +92,8 @@ def main():
     # }}}
 
 def rrddumper(target_dir, starttime=False, endtime=False, verbosity=False):
+    """Dump out the RRDs to XML
+    using the multiprocessing lib"""
     # {{{ rrddumper
     if starttime and endtime:
 
@@ -99,37 +111,62 @@ def rrddumper(target_dir, starttime=False, endtime=False, verbosity=False):
 
         dir_list = os.listdir(target_dir)
 
-        for fname in dir_list:
+        print "Total files in target dir: %s" % len(dir_list)
 
-            if '.rrd' in fname:
+        threads = []
 
-                try:
-                    rrd_source, rrd_suffix = fname.split('.')
-                except ValueError, e:
-                    logger("ValueError: Error with fname '%s': %s" % (fname, e))
-                else:
-                    full_path_source = '%s/%s' % (target_dir, fname)
-                    target_xml = '%s/%s%s' % (tmp_dir, rrd_source, xml_suffix)
+        # Don't flood the system
+        num_processes = multiprocessing.cpu_count() - 5
 
-                    if starttime or endtime:
-                        stat = os.stat(full_path_source)
-                        if starttime:
-                            if int(stat.st_mtime) >= int(starttime):
-                                if verbosity:
-                                    logger("Source: %s (last modified: %s), Target: %s" % (full_path_source, time.ctime(stat.st_mtime), target_xml))
-                                subprocess.call(['rrdtool', 'dump', full_path_source, target_xml])
-                        elif endtime:
-                            if int(stat.st_mtime) < int(endtime):
-                                if verbosity:
-                                    logger("Source: %s (last modified: %s), Target: %s" % (full_path_source, time.ctime(stat.st_mtime), target_xml))
-                                subprocess.call(['rrdtool', 'dump', full_path_source, target_xml])
+        # for fname in dir_list:
+        while threads or dir_list:
+            if(len(threads) < num_processes) and dir_list:
+                fname = dir_list.pop()
+                if '.rrd' in fname:
+                    try:
+                        rrd_source, rrd_suffix = fname.split('.')
+                    except ValueError, e:
+                        logger("ValueError: Error with fname '%s': %s" % (fname, e))
                     else:
-                        if verbosity:
-                            logger("Target: %s" % target_xml)
-                        subprocess.call(['rrdtool', 'dump', full_path_source, target_xml])
+                        full_path_source = '%s/%s' % (target_dir, fname)
+                        target_xml = '%s/%s%s' % (tmp_dir, rrd_source, xml_suffix)
+
+                        if starttime or endtime:
+                            stat = os.stat(full_path_source)
+                            if starttime:
+                                if int(stat.st_mtime) >= int(starttime):
+                                    if verbosity:
+                                        logger("Source: %s (last modified: %s), Target: %s" % (full_path_source, time.ctime(stat.st_mtime), target_xml))
+                                    # subprocess.call(['rrdtool', 'dump', full_path_source, target_xml])
+                                    p = multiprocessing.Process(target=multiprocess_looper, args=[full_path_source, target_xml])
+                                    p.start()
+                                    threads.append(p)
+                            elif endtime:
+                                if int(stat.st_mtime) < int(endtime):
+                                    if verbosity:
+                                        logger("Source: %s (last modified: %s), Target: %s" % (full_path_source, time.ctime(stat.st_mtime), target_xml))
+                                    # subprocess.call(['rrdtool', 'dump', full_path_source, target_xml])
+                                    p = multiprocessing.Process(target=multiprocess_looper, args=[full_path_source, target_xml])
+                                    p.start()
+                                    threads.append(p)
+                        else:
+                            if verbosity:
+                                logger("Target: %s" % target_xml)
+                            # subprocess.call(['rrdtool', 'dump', full_path_source, target_xml])
+                            p = multiprocessing.Process(target=multiprocess_looper, args=[full_path_source, target_xml])
+                            p.start()
+                            threads.append(p)
+            else:
+                for thread in threads:
+                    if not thread.is_alive():
+                        threads.remove(thread)
+
+        print "Total files in XML dump dir: %s" % len(os.listdir(tmp_dir))
     # }}}
 
 def rrdrestorer(target_dir, verbosity=False):
+    """Restore the RRDs from XML
+    """
     # {{{ rrdrestorer
     dir_list = os.listdir(tmp_dir)
     for fname in dir_list:
