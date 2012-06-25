@@ -147,7 +147,8 @@ def getperformance(dblist, snets, verbosity=False):
                 for mys in range(mysnet.query('dbRECORD_COUNT')):
                     mysnet[3] = mys
                     snet, time, npsta, perf = mysnet.getv('snet', 'time', 'npsta', 'perf')
-                    data_list.append({'time':time, 'value':perf})
+                    readable_time = epoch2str(int(time), "%Y-%m-%d")
+                    data_list.append({'time':time, 'readable_time':readable_time, 'value':perf, 'nsta':npsta})
                 performance[s].append(data_list)
             mysnet.free()
         sperf.free()
@@ -177,15 +178,15 @@ def calcstats(performance_data, verbosity=False):
     }
     just_the_data = [i['value'] for i in performance_data]
     if verbosity > 0: logfmt(" - Length of data: %s" % len(just_the_data))
-    stats['average'] = float(sum(just_the_data))/len(just_the_data)
+    stats['average'] = round(float(sum(just_the_data))/len(just_the_data))
 
     if len(just_the_data) % 2 == 0:
         median = []
         median.append(sorted(just_the_data)[len(just_the_data)/2])
         median.append(sorted(just_the_data)[len(just_the_data)/2 + 1])
-        stats['median'] = float(sum(median))/len(median)
+        stats['median'] = round(float(sum(median))/len(median))
     else:
-        stats['median'] = sorted(just_the_data)[len(just_the_data)/2]
+        stats['median'] = round(sorted(just_the_data)[len(just_the_data)/2])
 
     longest_perfect = []
     one_hundred = 0
@@ -262,7 +263,12 @@ def main():
     files = {}
     for s in snets:
         per_snet_stats = calcstats(performance[s], verbosity)
-        this_snet_json = {'data':performance[s], 'stats':per_snet_stats}
+        snet_meta = pfvars['pf_snets'][s]
+        color = pfvars['pf_colors'][snet_meta['color']]['hexidecimal']
+        this_snet_json = {'data':performance[s], 
+                          'snetmeta':pfvars['pf_snets'][s], 
+                          'color':color,
+                          'stats':per_snet_stats}
         json_file = '%s/%s.json' % (json_dir, s)
         files[s] = json_file.replace(pfvars['webroot'], '')
         if verbosity > 0:
